@@ -23,6 +23,19 @@ export async function generateQRCodeBuffer(publicUrl: string, width = 400): Prom
 }
 
 export function getPublicQRUrl(qrId: string): string {
-  const baseUrl = (import.meta.env.VITE_APP_URL || window.location.origin).replace(/\/$/, "");
-  return `${baseUrl}/q/${qrId}`;
+  const appUrl = import.meta.env.VITE_APP_URL?.trim().replace(/\/+$/, "");
+
+  if (appUrl) {
+    console.log("[QR URL] using VITE_APP_URL", {
+      appUrl,
+      finalUrl: `${appUrl}/q/${encodeURIComponent(qrId)}`,
+    });
+    return `${appUrl}/q/${encodeURIComponent(qrId)}`;
+  }
+
+  const fallback = `${window.location.origin}/q/${encodeURIComponent(qrId)}`;
+  console.log("[QR URL] VITE_APP_URL not set, using fallback", {
+    fallback,
+  });
+  return fallback;
 }

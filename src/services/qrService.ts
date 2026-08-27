@@ -1,4 +1,4 @@
-import { db } from "@/lib/firebase";
+import { db, app } from "@/lib/firebase";
 import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, serverTimestamp, query, where, collection, type DocumentData, type Timestamp } from "firebase/firestore";
 import type { QRCode } from "@/types";
 import { auth } from "@/lib/firebase";
@@ -50,9 +50,14 @@ export async function createQRCode(data: Omit<QRCode, "id" | "createdAt" | "upda
 
 export async function getQRCode(qrId: string): Promise<QRCode | null> {
   const ref = doc(db, COLLECTION, qrId);
+  console.log("[Public QR Debug] firestore path", { path: `qr_codes/${qrId}` });
+  console.log("[Public QR Debug] projectId", { projectId: app.options.projectId });
   const snap = await getDoc(ref);
+  console.log("[Public QR Debug] exists", { exists: snap.exists });
   if (!snap.exists()) return null;
-  return toDates({ id: snap.id, ...snap.data() });
+  const raw = { id: snap.id, ...snap.data() };
+  console.log("[Public QR Debug] raw data", { raw });
+  return toDates(raw);
 }
 
 export async function getQRCodes(organizationId: string): Promise<QRCode[]> {

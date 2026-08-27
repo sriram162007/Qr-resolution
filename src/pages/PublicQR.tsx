@@ -27,11 +27,14 @@ export default function PublicQR() {
   useEffect(() => {
     async function load() {
       if (!qrId) {
+        console.log("[Public QR Debug] no qrId param");
         setStatus("not_found");
         return;
       }
+      console.log("[Public QR Debug] requested qrId", { qrId });
       try {
         const data = await getQRCode(qrId);
+        console.log("[Public QR Debug] getQRCode result", { data });
         if (!data) {
           setStatus("not_found");
           return;
@@ -42,14 +45,27 @@ export default function PublicQR() {
           return;
         }
         setQR({ name: data.name, locationId: data.locationId, organizationId: data.organizationId, qrId: data.qrId });
-        const [org, loc] = await Promise.all([
-          getOrganization(data.organizationId),
-          getLocation(data.locationId),
-        ]);
-        if (org) setOrganizationName(org.name);
-        if (loc) setLocationName(getLocationPath([loc], loc.id));
+        try {
+          const [org, loc] = await Promise.all([
+            getOrganization(data.organizationId),
+            getLocation(data.locationId),
+          ]);
+          if (org) setOrganizationName(org.name);
+          if (loc) setLocationName(getLocationPath([loc], loc.id));
+        } catch (contextErr) {
+          console.error("[Public QR Debug] context load error", {
+            code: (contextErr as { code?: string })?.code,
+            message: (contextErr as { message?: string })?.message,
+            name: (contextErr as { name?: string })?.name,
+          });
+        }
         setStatus("valid");
-      } catch {
+      } catch (err) {
+        console.error("[Public QR Debug] load error", {
+          code: (err as { code?: string })?.code,
+          message: (err as { message?: string })?.message,
+          name: (err as { name?: string })?.name,
+        });
         setStatus("not_found");
       }
     }
