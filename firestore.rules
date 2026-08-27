@@ -6,21 +6,20 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
     
-    // Organizations - read/write for authenticated users (admin only)
+    // Organizations - authenticated CRUD
     match /organizations/{organizationId} {
       allow read, write: if request.auth != null;
     }
     
-    // Locations - public read for issue reporting, authenticated write
+    // Locations - authenticated CRUD
     match /locations/{locationId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read, write: if request.auth != null;
     }
     
-    // QR Codes - public read for scanning, authenticated write
+    // QR Codes - public read by ID, authenticated write
     match /qr_codes/{qrId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow get: if true;
+      allow list, create, update, delete: if request.auth != null;
     }
     
     // Tickets - public create and read by ticketId, authenticated write

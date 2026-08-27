@@ -21,3 +21,8 @@ export async function generateQRCodeBuffer(publicUrl: string, width = 400): Prom
     },
   });
 }
+
+export function getPublicQRUrl(qrId: string): string {
+  const baseUrl = (import.meta.env.VITE_APP_URL || window.location.origin).replace(/\/$/, "");
+  return `${baseUrl}/q/${qrId}`;
+}

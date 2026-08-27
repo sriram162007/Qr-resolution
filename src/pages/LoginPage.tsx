@@ -1,7 +1,5 @@
-"use client";
-
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,17 +8,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const { login, loading, error } = useAuth();
-  const router = useRouter();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { login, error } = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSubmitting(true);
     try {
-      await login({ email, password });
-      router.push("/");
-      router.refresh();
+      await login(email, password);
+      navigate("/admin", { replace: true });
     } catch {
-      // Error is handled by the hook
+      // error handled by hook
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -51,7 +52,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                disabled={loading}
+                disabled={isSubmitting}
               />
             </div>
             <div className="space-y-2">
@@ -64,11 +65,11 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                disabled={loading}
+                disabled={isSubmitting}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in..." : "Sign in"}
+            <Button type="submit" className="w-full" disabled={isSubmitting}>
+              {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
           </form>
         </CardContent>
