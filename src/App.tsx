@@ -6,6 +6,7 @@ import AdminOrganization from "@/pages/AdminOrganization";
 import AdminLocations from "@/pages/AdminLocations";
 import AdminQR from "@/pages/AdminQR";
 import PublicQR from "@/pages/PublicQR";
+import PublicReport from "@/pages/PublicReport";
 import PublicTrack from "@/pages/PublicTrack";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
@@ -47,6 +48,7 @@ export default function App() {
         }
       />
       <Route path="/q/:qrId" element={<PublicQR />} />
+      <Route path="/report/:qrId" element={<PublicReport />} />
       <Route path="/track/:ticketId" element={<PublicTrack />} />
     </Routes>
   );

@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { getQRCode } from "@/services/qrService";
+import { getOrganization } from "@/services/organizationService";
+import { getLocation } from "@/services/locationService";
+import { getLocationPath } from "@/lib/utils/locationPath";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type QRStatus = "loading" | "valid" | "inactive" | "not_found";
 
+interface QRState {
+  name: string;
+  locationId: string;
+  organizationId: string;
+  qrId: string;
+}
+
 export default function PublicQR() {
   const { qrId } = useParams<{ qrId: string }>();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<QRStatus>("loading");
-  const [qr, setQR] = useState<{ name: string; locationId: string } | null>(null);
+  const [qr, setQR] = useState<QRState | null>(null);
+  const [organizationName, setOrganizationName] = useState<string | null>(null);
+  const [locationName, setLocationName] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -23,10 +37,17 @@ export default function PublicQR() {
           return;
         }
         if (!data.isActive) {
+          setQR({ name: data.name, locationId: data.locationId, organizationId: data.organizationId, qrId: data.qrId });
           setStatus("inactive");
           return;
         }
-        setQR({ name: data.name, locationId: data.locationId });
+        setQR({ name: data.name, locationId: data.locationId, organizationId: data.organizationId, qrId: data.qrId });
+        const [org, loc] = await Promise.all([
+          getOrganization(data.organizationId),
+          getLocation(data.locationId),
+        ]);
+        if (org) setOrganizationName(org.name);
+        if (loc) setLocationName(getLocationPath([loc], loc.id));
         setStatus("valid");
       } catch {
         setStatus("not_found");
@@ -52,16 +73,25 @@ export default function PublicQR() {
           </CardHeader>
           <CardContent>
             {status === "valid" && qr && (
-              <div className="text-center space-y-2">
+              <div className="text-center space-y-4">
+                <div className="space-y-1">
+                  {organizationName && (
+                    <p className="text-sm font-medium">{organizationName}</p>
+                  )}
+                  {locationName && (
+                    <p className="text-sm text-muted-foreground">{locationName}</p>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">
-                  <span className="font-medium">Name:</span> {qr.name}
+                  Need help with something here?
                 </p>
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-medium">QR ID:</span> <span className="font-mono">{qrId}</span>
-                </p>
-                <p className="text-sm text-muted-foreground mt-4">
-                  Reporting will be available here soon.
-                </p>
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={() => navigate(`/report/${qr.qrId}`)}
+                >
+                  Report an Issue
+                </Button>
               </div>
             )}
             {status === "inactive" && (
