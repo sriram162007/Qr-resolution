@@ -54,3 +54,31 @@ export interface QRCode {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export type TicketStatus = "OPEN" | "TRIAGED" | "ASSIGNED" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+
+export type TicketSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export type TicketPriority = "P4" | "P3" | "P2" | "P1";
+
+export interface Ticket {
+  id: string;
+  ticketId: string;
+  qrId: string;
+  organizationId: string;
+  locationId: string;
+  category: string;
+  subcategory?: string;
+  title: string;
+  description: string;
+  reportedArea?: string;
+  severity: TicketSeverity;
+  priority: TicketPriority;
+  status: TicketStatus;
+  aiSummary?: string;
+  aiConfidence?: number;
+  aiSuggestedAction?: string;
+  photoUrl?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

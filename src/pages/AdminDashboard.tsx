@@ -53,14 +53,16 @@ export default function AdminDashboard() {
             </CardContent>
           </Card>
         </Link>
-        <Card>
-          <CardHeader>
-            <CardTitle>Tickets</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">Ticket management coming soon.</p>
-          </CardContent>
-        </Card>
+        <Link to="/admin/tickets">
+          <Card className="hover:shadow-md transition-shadow cursor-pointer">
+            <CardHeader>
+              <CardTitle>Tickets</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-muted-foreground">View and manage reported issues.</p>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
     </div>
   );

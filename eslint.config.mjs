@@ -5,7 +5,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import ts from "typescript-eslint";
 
 const eslintConfig = defineConfig([
-  globalIgnores(["dist/**", "build/**", "node_modules/**", ".next/**"]),
+  globalIgnores(["dist/**", "build/**", "node_modules/**", ".next/**", "api/**"]),
   {
     files: ["**/*.{ts,tsx}"],
     plugins: {

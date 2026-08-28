@@ -4,22 +4,39 @@ import { getQRCode } from "@/services/qrService";
 import { getOrganization } from "@/services/organizationService";
 import { getLocation, getChildLocations } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
+import { analyzeIssue } from "@/services/aiIssueService";
+import { createTicket } from "@/services/ticketService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import type { Location } from "@/types";
 
 const CATEGORIES = [
-  { value: "electrical", label: "Electrical" },
-  { value: "plumbing", label: "Plumbing / Water" },
-  { value: "cleaning", label: "Cleaning" },
-  { value: "furniture", label: "Furniture" },
-  { value: "network", label: "Network / Wi-Fi" },
-  { value: "safety", label: "Safety" },
-  { value: "infrastructure", label: "Infrastructure" },
-  { value: "other", label: "Other" },
+  { value: "Electrical", label: "Electrical" },
+  { value: "Plumbing", label: "Plumbing / Water" },
+  { value: "Cleaning", label: "Cleaning" },
+  { value: "Furniture", label: "Furniture" },
+  { value: "HVAC", label: "HVAC" },
+  { value: "Network", label: "Network / Wi-Fi" },
+  { value: "Safety", label: "Safety" },
+  { value: "Infrastructure", label: "Infrastructure" },
+  { value: "Other", label: "Other" },
 ] as const;
 
 type Category = (typeof CATEGORIES)[number]["value"];
+type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+interface AIResult {
+  title: string;
+  category: string;
+  subcategory?: string;
+  reportedArea?: string;
+  severity: Severity;
+  priority: "P4" | "P3" | "P2" | "P1";
+  summary: string;
+  suggestedAction: string;
+  confidence: number;
+}
+
 
 export default function PublicReport() {
   const { qrId } = useParams<{ qrId: string }>();
@@ -30,12 +47,19 @@ export default function PublicReport() {
   const [childLocations, setChildLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [ticketId, setTicketId] = useState<string | null>(null);
 
-  const [category, setCategory] = useState<Category>("other");
-  const [exactArea, setExactArea] = useState<string>("");
   const [description, setDescription] = useState("");
   const [photoName, setPhotoName] = useState("");
+
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<AIResult | null>(null);
+  const [useManual, setUseManual] = useState(false);
+
+  const [manualCategory, setManualCategory] = useState<Category>("Other");
+  const [manualArea, setManualArea] = useState<string>("");
+  const [manualSeverity, setManualSeverity] = useState<Severity>("MEDIUM");
 
   useEffect(() => {
     async function load() {
@@ -65,13 +89,75 @@ export default function PublicReport() {
     load();
   }, [qrId]);
 
+  const handleAnalyze = async () => {
+    if (!description.trim() || !qr) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const result = await analyzeIssue({
+        description: description.trim(),
+        organization: organizationName || qr.name,
+        location: locationName || "",
+        childLocations: childLocations.map((loc) => ({ id: loc.id, name: loc.name })),
+      });
+      setAiResult(result);
+      setUseManual(false);
+    } catch (err) {
+      setAiError("AI analysis is temporarily unavailable. You can submit manually.");
+      setUseManual(true);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description.trim()) return;
+    if (!description.trim() || !qr) return;
+
+    let finalCategory: string = manualCategory;
+    let finalArea = manualArea;
+    let finalSeverity = manualSeverity;
+    let finalSummary = description.trim();
+    let finalSuggestedAction = "";
+    let finalConfidence = 0;
+    let finalTitle = description.trim().slice(0, 80);
+
+    if (!useManual && aiResult) {
+      finalCategory = aiResult.category;
+      finalArea = aiResult.reportedArea || manualArea;
+      finalSeverity = aiResult.severity;
+      finalSummary = aiResult.summary || description.trim();
+      finalSuggestedAction = aiResult.suggestedAction;
+      finalConfidence = aiResult.confidence || 0;
+      finalTitle = aiResult.title || description.trim().slice(0, 80);
+    }
+
     setSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    setSubmitted(true);
-    setSubmitting(false);
+    try {
+      const newTicketId = await createTicket({
+        ticketId: "",
+        qrId: qrId || "",
+        organizationId: qr.organizationId,
+        locationId: qr.locationId,
+        category: finalCategory,
+        subcategory: undefined,
+        title: finalTitle,
+        description: description.trim(),
+        reportedArea: finalArea || undefined,
+        severity: finalSeverity,
+        priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+        status: "OPEN",
+        aiSummary: finalSummary,
+        aiConfidence: finalConfidence,
+        aiSuggestedAction: finalSuggestedAction || undefined,
+        photoUrl: undefined,
+      });
+      setTicketId(newTicketId);
+    } catch {
+      setAiError("Failed to create ticket. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -107,7 +193,7 @@ export default function PublicReport() {
     );
   }
 
-  if (submitted) {
+  if (ticketId) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-3.5rem)] px-4 py-8">
         <div className="w-full max-w-sm space-y-6">
@@ -116,13 +202,17 @@ export default function PublicReport() {
           </div>
           <Card>
             <CardHeader className="text-center">
-              <CardTitle className="text-2xl">Ready to Submit</CardTitle>
+              <CardTitle className="text-2xl">Issue Reported Successfully</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                Your issue report has been prepared. Ticket creation will be available in the next update.
+                Your issue has been reported with ticket ID:
               </p>
-              <Button className="w-full mt-4" onClick={() => navigate("/")}>
+              <p className="text-center font-mono text-lg font-semibold">{ticketId}</p>
+              <Button className="w-full" size="lg" onClick={() => navigate(`/track/${ticketId}`)}>
+                Track Your Issue
+              </Button>
+              <Button variant="outline" className="w-full" onClick={() => navigate("/")}>
                 Go Home
               </Button>
             </CardContent>
@@ -149,54 +239,8 @@ export default function PublicReport() {
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <label htmlFor="category" className="text-sm font-medium">
-                  Category <span className="text-destructive">*</span>
-                </label>
-                <select
-                  id="category"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value as Category)}
-                  className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                >
-                  {CATEGORIES.map((cat) => (
-                    <option key={cat.value} value={cat.value}>{cat.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label htmlFor="exactArea" className="text-sm font-medium">
-                  Exact Area
-                </label>
-                {childLocations.length > 0 ? (
-                  <select
-                    id="exactArea"
-                    value={exactArea}
-                    onChange={(e) => setExactArea(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                  >
-                    <option value="">Select area</option>
-                    {childLocations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>{getLocationPath([loc], loc.id)}</option>
-                    ))}
-                    <option value="__other__">Other / Not listed</option>
-                  </select>
-                ) : (
-                  <select
-                    id="exactArea"
-                    value={exactArea}
-                    onChange={(e) => setExactArea(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                  >
-                    <option value="">Select area</option>
-                    <option value="__other__">Other / Not listed</option>
-                  </select>
-                )}
-              </div>
-
-              <div className="space-y-2">
                 <label htmlFor="description" className="text-sm font-medium">
-                  Description <span className="text-destructive">*</span>
+                  What happened? <span className="text-destructive">*</span>
                 </label>
                 <textarea
                   id="description"
@@ -204,9 +248,12 @@ export default function PublicReport() {
                   onChange={(e) => setDescription(e.target.value)}
                   required
                   rows={4}
-                  placeholder="Tell us what happened..."
+                  placeholder="Describe the problem in your own words..."
                   className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Example: The AC in Room 204 is not working and the room is very hot.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -228,9 +275,114 @@ export default function PublicReport() {
                 )}
               </div>
 
-              <Button type="submit" className="w-full" size="lg" disabled={submitting || !description.trim()}>
-                {submitting ? "Submitting..." : "Submit Report"}
-              </Button>
+              {!aiResult && !useManual && (
+                <Button
+                  type="button"
+                  className="w-full"
+                  size="lg"
+                  onClick={handleAnalyze}
+                  disabled={aiLoading || !description.trim()}
+                >
+                  {aiLoading ? "AI is understanding your issue..." : "Analyze Issue"}
+                </Button>
+              )}
+
+              {aiError && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive">
+                  {aiError}
+                </div>
+              )}
+
+              {aiResult && !useManual && (
+                <div className="space-y-3 rounded-md border bg-muted/50 p-4">
+                  <h3 className="text-sm font-semibold">AI Analysis Result</h3>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="font-medium">Category:</span> {aiResult.category}
+                    </div>
+                    <div>
+                      <span className="font-medium">Severity:</span> {aiResult.severity}
+                    </div>
+                    <div>
+                      <span className="font-medium">Priority:</span> {aiResult.priority}
+                    </div>
+                    {aiResult.reportedArea && (
+                      <div>
+                        <span className="font-medium">Area:</span> {aiResult.reportedArea}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs space-y-1">
+                    <p><span className="font-medium">Summary:</span> {aiResult.summary}</p>
+                    <p><span className="font-medium">Suggested action:</span> {aiResult.suggestedAction}</p>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    AI confidence: {Math.round((aiResult.confidence || 0) * 100)}%
+                  </p>
+                  <div className="flex gap-2">
+                    <Button type="button" className="flex-1" size="sm" onClick={() => setUseManual(true)}>
+                      Edit Manually
+                    </Button>
+                    <Button type="submit" className="flex-1" size="sm" disabled={submitting}>
+                      {submitting ? "Submitting..." : "Review & Submit"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {(useManual || aiResult) && (
+                <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+                  <h3 className="text-sm font-semibold">Manual Details</h3>
+                  <div className="space-y-2">
+                    <label htmlFor="manualCategory" className="text-sm font-medium">
+                      Category
+                    </label>
+                    <select
+                      id="manualCategory"
+                      value={manualCategory}
+                      onChange={(e) => setManualCategory(e.target.value as Category)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                    >
+                      {CATEGORIES.map((cat) => (
+                        <option key={cat.value} value={cat.value}>{cat.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="manualArea" className="text-sm font-medium">
+                      Exact Area
+                    </label>
+                    <input
+                      id="manualArea"
+                      value={manualArea}
+                      onChange={(e) => setManualArea(e.target.value)}
+                      placeholder="e.g. Room 204"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="manualSeverity" className="text-sm font-medium">
+                      Severity
+                    </label>
+                    <select
+                      id="manualSeverity"
+                      value={manualSeverity}
+                      onChange={(e) => setManualSeverity(e.target.value as Severity)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                    >
+                      <option value="LOW">Low</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HIGH">High</option>
+                      <option value="CRITICAL">Critical</option>
+                    </select>
+                  </div>
+                  {useManual && (
+                    <Button type="submit" className="w-full" size="lg" disabled={submitting || !description.trim()}>
+                      {submitting ? "Submitting..." : "Submit Issue"}
+                    </Button>
+                  )}
+                </div>
+              )}
             </form>
           </CardContent>
         </Card>
