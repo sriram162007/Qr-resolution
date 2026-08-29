@@ -140,6 +140,7 @@ export default function AdminTicketDetail() {
     setError(null);
     setSuccess(null);
     try {
+      const previousStatus = ticket.status;
       const actor = { id: user?.email || undefined, name: user?.email || undefined };
       await updateTicketDetail(ticket.id, {
         status: status || undefined,
@@ -161,6 +162,22 @@ export default function AdminTicketDetail() {
         setAssignedToName(data.assignedToName || "");
         setResolutionNotes(data.resolutionNotes || "");
         setResolutionSummary(data.resolutionSummary || "");
+        const newStatus = data.status;
+        if (newStatus !== previousStatus && data.phoneNumber) {
+          fetch("/api/send-whatsapp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              phoneNumber: data.phoneNumber,
+              ticketId: data.ticketId,
+              title: data.title,
+              status: newStatus,
+              resolutionNotes: data.resolutionNotes,
+            }),
+          }).catch((whatsappError) => {
+            console.error("[Ticket Update] WhatsApp notification failed", whatsappError);
+          });
+        }
       }
       const acts = await getTicketActivities(ticketId);
       setActivities(acts);

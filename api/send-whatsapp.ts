@@ -3,8 +3,37 @@ import twilio from "twilio";
 type WhatsAppRequest = {
   phoneNumber: string;
   ticketId: string;
-  title: string;
+  title?: string;
+  status?: string;
+  resolutionNotes?: string;
 };
+
+function buildBody(body: Partial<WhatsAppRequest>): string {
+  const ticketId = body.ticketId || "";
+  const status = (body.status || "").toUpperCase();
+
+  if (status === "RESOLVED") {
+    const notes = body.resolutionNotes && body.resolutionNotes.trim().length > 0
+      ? `\nResolution: ${body.resolutionNotes.trim()}`
+      : "";
+    return `Your ticket ${ticketId} has been resolved.${notes}`;
+  }
+  if (status === "CLOSED") {
+    return `Your ticket ${ticketId} has been closed.`;
+  }
+  if (status === "TRIAGED") {
+    return `Your ticket ${ticketId} has been reviewed and is now being processed.`;
+  }
+  if (status === "ASSIGNED") {
+    return `Your ticket ${ticketId} has been assigned to the appropriate team.`;
+  }
+  if (status === "IN_PROGRESS") {
+    return `Your ticket ${ticketId} is now being worked on.`;
+  }
+
+  const title = body.title && body.title.trim().length > 0 ? body.title.trim() : "N/A";
+  return `Your issue has been reported successfully.\n\nTicket ID: ${ticketId}\nIssue: ${title}\nStatus: OPEN\n\nYou can use your Ticket ID to track your issue.`;
+}
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") {
@@ -53,10 +82,12 @@ export default async function handler(req: any, res: any) {
       ? fromNumber
       : `whatsapp:${fromNumber}`;
 
+    const messageBody = buildBody(body);
+
     await client.messages.create({
       from,
       to: toNumber,
-      body: `Your issue has been reported successfully.\n\nTicket ID: ${body.ticketId}\nIssue: ${body.title || "N/A"}\nStatus: OPEN\n\nYou can use your Ticket ID to track your issue.`,
+      body: messageBody,
     });
 
     res.statusCode = 200;

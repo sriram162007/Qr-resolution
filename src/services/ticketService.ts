@@ -73,8 +73,11 @@ export async function getTickets(organizationId: string): Promise<Ticket[]> {
 
 export async function updateTicket(ticketId: string, data: Partial<Ticket>, actor?: { id?: string; name?: string }): Promise<void> {
   const ref = doc(db, TICKETS_COLLECTION, ticketId);
+  const cleanData = Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as Record<string, unknown>;
   const payload: Record<string, unknown> = {
-    ...data,
+    ...cleanData,
     updatedAt: serverTimestamp(),
   };
   if (actor?.id) payload.lastUpdatedBy = actor.id;
@@ -118,7 +121,10 @@ export async function updateTicketDetail(ticketId: string, data: {
       throw new Error(`Invalid status transition: ${current.status} → ${data.status}`);
     }
   }
-  const updates: Record<string, unknown> = { ...data, updatedAt: serverTimestamp() };
+  const cleanData = Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as Record<string, unknown>;
+  const updates: Record<string, unknown> = { ...cleanData, updatedAt: serverTimestamp() };
   if (data.status === "RESOLVED") {
     updates.resolvedAt = serverTimestamp();
   }
@@ -142,14 +148,11 @@ export async function updateTicketDetail(ticketId: string, data: {
 
 export async function addActivity(ticketId: string, type: string, message: string, changedBy?: string, changedByName?: string): Promise<void> {
   const activityRef = doc(collection(db, TICKETS_COLLECTION, ticketId, ACTIVITY_COLLECTION));
-  await setDoc(activityRef, {
-    ticketId,
-    type,
-    message,
-    changedBy,
-    changedByName,
-    createdAt: serverTimestamp(),
-  });
+  const payload = Object.fromEntries(
+    Object.entries({ ticketId, type, message, changedBy, changedByName, createdAt: serverTimestamp() })
+      .filter(([, value]) => value !== undefined)
+  );
+  await setDoc(activityRef, payload);
 }
 
 export async function getTicketActivities(ticketId: string): Promise<TicketActivity[]> {

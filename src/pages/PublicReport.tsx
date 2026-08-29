@@ -244,27 +244,26 @@ export default function PublicReport() {
         }
       }
 
-      await createTicket(
-        {
-          qrId: qrId || "",
-          organizationId: qr.organizationId,
-          locationId: qr.locationId,
-          category: finalCategory,
-          subcategory: undefined,
-          title: finalTitle,
-          description: description.trim(),
-          reportedArea: finalArea || undefined,
-          severity: finalSeverity,
-          priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
-          status: "OPEN",
-          aiSummary: finalSummary,
-          aiConfidence: finalConfidence,
-          aiSuggestedAction: finalSuggestedAction || undefined,
-          photoUrl,
-          phoneNumber: normalizedPhone,
-        },
-        newTicketId
-      );
+      const ticketData: Record<string, unknown> = {
+        qrId: qrId || "",
+        organizationId: qr.organizationId,
+        locationId: qr.locationId,
+        category: finalCategory,
+        title: finalTitle,
+        description: description.trim(),
+        severity: finalSeverity,
+        priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+        status: "OPEN",
+        aiSummary: finalSummary,
+        aiConfidence: finalConfidence,
+      };
+
+      if (finalArea) ticketData.reportedArea = finalArea;
+      if (finalSuggestedAction) ticketData.aiSuggestedAction = finalSuggestedAction;
+      if (photoUrl) ticketData.photoUrl = photoUrl;
+      if (normalizedPhone) ticketData.phoneNumber = normalizedPhone;
+
+      await createTicket(ticketData as any, newTicketId);
 
       if (normalizedPhone) {
         try {
