@@ -6,6 +6,7 @@ import { getLocation } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
 import { getUsers } from "@/services/ticketService";
 import { suggestResolution } from "@/services/aiResolutionService";
+import { buildChangeList, normalizePhoneNumber } from "@/services/whatsappService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -140,6 +141,7 @@ export default function AdminTicketDetail() {
     setError(null);
     setSuccess(null);
     try {
+      const oldTicket = { ...ticket } as Record<string, unknown>;
       const previousStatus = ticket.status;
       const actor = { id: user?.email || undefined, name: user?.email || undefined };
       await updateTicketDetail(ticket.id, {
@@ -163,17 +165,23 @@ export default function AdminTicketDetail() {
         setResolutionNotes(data.resolutionNotes || "");
         setResolutionSummary(data.resolutionSummary || "");
         const newStatus = data.status;
-        if (newStatus !== previousStatus && data.phoneNumber) {
+        const changes = buildChangeList(oldTicket, data);
+        const statusChanged = previousStatus !== newStatus;
+        const normalizedPhone = normalizePhoneNumber(data.phoneNumber || "");
+        if ((statusChanged || changes.length > 0) && normalizedPhone) {
+          const payload: Record<string, unknown> = {
+            phoneNumber: normalizedPhone,
+            ticketId: data.ticketId,
+            type: statusChanged ? "status_changed" : "updated",
+            status: newStatus,
+            changes: changes.length > 0 ? changes : undefined,
+            resolutionNotes: data.resolutionNotes,
+            assignedToName: data.assignedToName,
+          };
           fetch("/api/send-whatsapp", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              phoneNumber: data.phoneNumber,
-              ticketId: data.ticketId,
-              title: data.title,
-              status: newStatus,
-              resolutionNotes: data.resolutionNotes,
-            }),
+            body: JSON.stringify(payload),
           }).catch((whatsappError) => {
             console.error("[Ticket Update] WhatsApp notification failed", whatsappError);
           });

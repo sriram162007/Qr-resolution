@@ -7,6 +7,7 @@ import { getLocationPath } from "@/lib/utils/locationPath";
 import { analyzeIssue } from "@/services/aiIssueService";
 import { createTicket, generateTicketId } from "@/services/ticketService";
 import { uploadTicketPhoto } from "@/services/supabaseService";
+import { normalizePhoneNumber } from "@/services/whatsappService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import type { Location } from "@/types";
@@ -231,7 +232,7 @@ export default function PublicReport() {
     try {
       const newTicketId = generateTicketId();
       let photoUrl: string | undefined;
-      const normalizedPhone = phoneNumber.trim() ? phoneNumber.trim() : undefined;
+      const normalizedPhone = normalizePhoneNumber(phoneNumber);
 
       if (photoFile) {
         try {
@@ -273,7 +274,10 @@ export default function PublicReport() {
             body: JSON.stringify({
               phoneNumber: normalizedPhone,
               ticketId: newTicketId,
+              type: "created",
               title: finalTitle,
+              priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+              status: "OPEN",
             }),
           });
         } catch (whatsappError) {
