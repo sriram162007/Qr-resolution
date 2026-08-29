@@ -1,4 +1,13 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "tickets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "organizationId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

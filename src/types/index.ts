@@ -79,6 +79,7 @@ export interface Ticket {
   aiConfidence?: number;
   aiSuggestedAction?: string;
   photoUrl?: string;
+  assignedTo?: string;
   createdAt: Date;
   updatedAt: Date;
 }

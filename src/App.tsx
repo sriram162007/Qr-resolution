@@ -6,6 +6,7 @@ import AdminOrganization from "@/pages/AdminOrganization";
 import AdminLocations from "@/pages/AdminLocations";
 import AdminQR from "@/pages/AdminQR";
 import AdminTickets from "@/pages/AdminTickets";
+import AdminTicketDetail from "@/pages/AdminTicketDetail";
 import PublicQR from "@/pages/PublicQR";
 import PublicReport from "@/pages/PublicReport";
 import PublicTrack from "@/pages/PublicTrack";
@@ -53,6 +54,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <AdminTickets />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/tickets/:ticketId"
+        element={
+          <ProtectedRoute>
+            <AdminTicketDetail />
           </ProtectedRoute>
         }
       />

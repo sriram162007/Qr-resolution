@@ -135,7 +135,6 @@ export default function PublicReport() {
     setSubmitting(true);
     try {
       const newTicketId = await createTicket({
-        ticketId: "",
         qrId: qrId || "",
         organizationId: qr.organizationId,
         locationId: qr.locationId,
@@ -153,8 +152,14 @@ export default function PublicReport() {
         photoUrl: undefined,
       });
       setTicketId(newTicketId);
-    } catch {
-      setAiError("Failed to create ticket. Please try again.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      console.error("[Ticket Submit] create failed", {
+        message,
+        code: (err as { code?: string })?.code,
+        name: (err as { name?: string })?.name,
+      });
+      setAiError(`Failed to create ticket: ${message}`);
     } finally {
       setSubmitting(false);
     }
