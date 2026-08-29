@@ -3,6 +3,10 @@ export interface AIAnalysisRequest {
   organization: string;
   location: string;
   childLocations: Array<{ id: string; name: string }>;
+  image?: {
+    data: string;
+    mimeType: string;
+  };
 }
 
 export interface AIAnalysisResponse {

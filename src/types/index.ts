@@ -80,6 +80,24 @@ export interface Ticket {
   aiSuggestedAction?: string;
   photoUrl?: string;
   assignedTo?: string;
+  assignedToName?: string;
+  resolutionNotes?: string;
+  resolutionSummary?: string;
+  resolvedAt?: Date;
+  closedAt?: Date;
+  lastUpdatedBy?: string;
+  lastUpdatedByName?: string;
+  phoneNumber?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface TicketActivity {
+  id: string;
+  ticketId: string;
+  type: string;
+  message: string;
+  changedBy?: string;
+  changedByName?: string;
+  createdAt: Date;
 }

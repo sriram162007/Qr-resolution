@@ -1,7 +1,6 @@
 import { db } from "@/lib/firebase";
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, type DocumentData, type Timestamp } from "firebase/firestore";
 import type { Organization } from "@/types";
-import { auth } from "@/lib/firebase";
 
 const COLLECTION = "organizations";
 
@@ -23,27 +22,16 @@ export async function createOrganization(data: Omit<Organization, "id" | "create
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `organizations/${organizationId}`,
-    dataKeys: Object.keys(payload),
-    hasUndefined: Object.values(payload).some(v => v === undefined)
-  });
-  console.log("[Organization Create] before setDoc");
   try {
     await setDoc(ref, payload);
-    console.log("[Organization Create] after setDoc");
-    console.log("[Organization Create] service returning", { organizationId });
     return organizationId;
-  } catch (err) {
-    console.error("[Organization Create] WRITE FAILED", {
-      code: (err as { code?: string })?.code,
-      message: (err as { message?: string })?.message,
-      name: (err as { name?: string })?.name,
+  } catch (error) {
+    console.error("[Organization Create] failed", {
+      code: (error as { code?: string })?.code,
+      message: (error as { message?: string })?.message,
+      name: (error as { name?: string })?.name,
     });
-    throw err;
+    throw error;
   }
 }
 
@@ -56,25 +44,18 @@ export async function getOrganization(organizationId: string): Promise<Organizat
 
 export async function updateOrganization(organizationId: string, data: Partial<Organization>): Promise<void> {
   const ref = doc(db, COLLECTION, organizationId);
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `organizations/${organizationId}`
-  });
   try {
     await updateDoc(ref, {
       ...data,
       updatedAt: serverTimestamp(),
     });
-    console.log("[Organization Update] WRITE SUCCESS");
-  } catch (err) {
-    console.error("[Organization Update] WRITE FAILED", {
-      code: (err as { code?: string })?.code,
-      message: (err as { message?: string })?.message,
-      name: (err as { name?: string })?.name,
+  } catch (error) {
+    console.error("[Organization Update] failed", {
+      code: (error as { code?: string })?.code,
+      message: (error as { message?: string })?.message,
+      name: (error as { name?: string })?.name,
     });
-    throw err;
+    throw error;
   }
 }
 

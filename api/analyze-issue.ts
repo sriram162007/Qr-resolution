@@ -5,6 +5,10 @@ type AIAnalysisRequest = {
   organization: string;
   location: string;
   childLocations: Array<{ id: string; name: string }>;
+  image?: {
+    data: string;
+    mimeType: string;
+  };
 };
 
 type AIAnalysisResponse = {
@@ -21,6 +25,9 @@ type AIAnalysisResponse = {
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 
+const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_BASE64_LENGTH = 5 * 1024 * 1024;
+
 const CATEGORIES = [
   "Electrical",
   "Plumbing",
@@ -35,6 +42,7 @@ const CATEGORIES = [
 
 function buildPrompt(req: AIAnalysisRequest): string {
   const childLocationList = req.childLocations.map((c) => `- ${c.name}`).join("\n");
+  const hasImage = !!req.image;
   return `You are an issue-intelligence engine for a facility management system.
 
 Organization: ${req.organization}
@@ -45,15 +53,15 @@ ${childLocationList || "(none)"}
 User description:
 "${req.description}"
 
-Classify this issue into ONE of these categories:
-${CATEGORIES.join(", ")}
+${hasImage ? "The user also provided a photo. Use it as supporting visual evidence alongside the description. If the image and description disagree, acknowledge uncertainty rather than inventing facts. Do not identify people or infer sensitive personal information." : "No photo was provided."}
 
 Rules:
-- Never invent technical facts not present in the user description.
+- Never invent technical facts not present in the user description or clearly visible in the image.
 - If the user mentions a specific sub-area that exists in the available list, use it as reportedArea.
 - If no matching sub-area exists, leave reportedArea empty or use the user's own words.
-- Severity must be grounded in the description only.
-- Confidence must reflect how certain you are.
+- Severity must be grounded in the description and visible evidence only.
+- Confidence must reflect how certain you are given both text and any image.
+- Do not claim a component is definitely broken unless visually clear.
 
 Return ONLY valid JSON with this exact schema:
 {
@@ -99,6 +107,16 @@ function validateResponse(data: any): AIAnalysisResponse {
   };
 }
 
+function validateImage(image: any): { data: string; mimeType: string } | null {
+  if (!image || typeof image !== "object") return null;
+  const data = typeof image.data === "string" ? image.data.trim() : "";
+  const mimeType = typeof image.mimeType === "string" ? image.mimeType.trim().toLowerCase() : "";
+  if (!data || !mimeType) return null;
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) return null;
+  if (data.length > MAX_BASE64_LENGTH) return null;
+  return { data, mimeType };
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -112,6 +130,7 @@ export default async function handler(req: any, res: any) {
   console.log("[AI API] request received", {
     method: req.method,
     descriptionLength: typeof body.description === "string" ? body.description.length : 0,
+    hasImage: !!body.image,
   });
 
   if (!body.description || typeof body.description !== "string" || body.description.trim().length === 0) {
@@ -140,6 +159,14 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const image = validateImage(body.image);
+  if (body.image && !image) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ message: "Invalid image. Allowed types: JPG, PNG, WEBP. Max size: 5 MB." }));
+    return;
+  }
+
   try {
     console.log("[AI API] initializing Gemini client with model:", GEMINI_MODEL);
     const client = new GoogleGenAI({ apiKey });
@@ -151,10 +178,28 @@ export default async function handler(req: any, res: any) {
       childLocations: Array.isArray(body.childLocations) ? body.childLocations : [],
     });
 
-    console.log("[AI API] Gemini request started");
+    const contents: any[] = [
+      {
+        role: "user",
+        parts: [
+          { text: prompt },
+        ],
+      },
+    ];
+
+    if (image) {
+      contents[0].parts.push({
+        inlineData: {
+          data: image.data,
+          mimeType: image.mimeType,
+        },
+      });
+    }
+
+    console.log("[AI API] Gemini request started", { hasImage: !!image });
     const response = await client.models.generateContent({
       model: GEMINI_MODEL,
-      contents: prompt,
+      contents,
       config: {
         responseMimeType: "application/json",
       },

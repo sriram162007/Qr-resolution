@@ -1,7 +1,6 @@
 import { db } from "@/lib/firebase";
 import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, serverTimestamp, query, where, collection, type DocumentData, type Timestamp } from "firebase/firestore";
 import type { Location } from "@/types";
-import { auth } from "@/lib/firebase";
 
 const COLLECTION = "locations";
 
@@ -14,50 +13,28 @@ function toDates(data: DocumentData & { createdAt?: Timestamp; updatedAt?: Times
 }
 
 export async function createLocation(data: Omit<Location, "id" | "createdAt" | "updatedAt">, overrideId?: string): Promise<string> {
-  console.log("[Location Create] function entered");
+  const id = overrideId || doc(collection(db, COLLECTION)).id;
+  const ref = doc(db, COLLECTION, id);
+  const cleanData = Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as Omit<Location, "id" | "createdAt" | "updatedAt">;
+  const payload = {
+    ...cleanData,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
   try {
-    const id = overrideId || doc(collection(db, COLLECTION)).id;
-    const ref = doc(db, COLLECTION, id);
-    const cleanData = Object.fromEntries(
-      Object.entries(data).filter(([, value]) => value !== undefined)
-    ) as Omit<Location, "id" | "createdAt" | "updatedAt">;
-    const payload = {
-      ...cleanData,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-    console.log("[Firestore Debug] before write", {
-      uid: auth.currentUser?.uid ?? null,
-      email: auth.currentUser?.email ?? null,
-      authenticated: !!auth.currentUser,
-      path: `locations/${id}`,
-      dataKeys: Object.keys(payload),
-      hasUndefined: Object.values(payload).some(v => v === undefined)
+    await setDoc(ref, payload);
+    return id;
+  } catch (error) {
+    console.error("[Location Create] failed", {
+      code: (error as { code?: string })?.code,
+      message: (error as { message?: string })?.message,
+      name: (error as { name?: string })?.name,
     });
-    console.log("[Location Create] before setDoc");
-    try {
-      await setDoc(ref, payload);
-      console.log("[Location Create] after setDoc");
-      console.log("[Location Create] service returning", { id });
-      return id;
-    } catch (error) {
-      console.error("[Location Create] WRITE FAILED", {
-        code: (error as { code?: string })?.code,
-        message: (error as { message?: string })?.message,
-        name: (error as { name?: string })?.name,
-      });
-      throw error;
-    }
-  } catch (err) {
-    console.error("[Location Create] UNEXPECTED ERROR", {
-      code: (err as { code?: string })?.code,
-      message: (err as { message?: string })?.message,
-      name: (err as { name?: string })?.name,
-    });
-    throw err;
+    throw error;
   }
 }
-
 
 export async function getLocation(locationId: string): Promise<Location | null> {
   const ref = doc(db, COLLECTION, locationId);
@@ -80,20 +57,13 @@ export async function getChildLocations(parentLocationId: string): Promise<Locat
 
 export async function updateLocation(locationId: string, data: Partial<Location>): Promise<void> {
   const ref = doc(db, COLLECTION, locationId);
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `locations/${locationId}`
-  });
   try {
     await updateDoc(ref, {
       ...data,
       updatedAt: serverTimestamp(),
     });
-    console.log("[Location Update] WRITE SUCCESS");
   } catch (error) {
-    console.error("[Location Update] WRITE FAILED", {
+    console.error("[Location Update] failed", {
       code: (error as { code?: string })?.code,
       message: (error as { message?: string })?.message,
       name: (error as { name?: string })?.name,
@@ -108,17 +78,10 @@ export async function setLocationActive(locationId: string, isActive: boolean): 
 
 export async function deleteLocation(locationId: string): Promise<void> {
   const ref = doc(db, COLLECTION, locationId);
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `locations/${locationId}`
-  });
   try {
     await deleteDoc(ref);
-    console.log("[Location Delete] WRITE SUCCESS");
   } catch (error) {
-    console.error("[Location Delete] WRITE FAILED", {
+    console.error("[Location Delete] failed", {
       code: (error as { code?: string })?.code,
       message: (error as { message?: string })?.message,
       name: (error as { name?: string })?.name,

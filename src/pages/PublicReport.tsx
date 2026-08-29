@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getQRCode } from "@/services/qrService";
 import { getOrganization } from "@/services/organizationService";
 import { getLocation, getChildLocations } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
 import { analyzeIssue } from "@/services/aiIssueService";
-import { createTicket } from "@/services/ticketService";
+import { createTicket, generateTicketId } from "@/services/ticketService";
+import { uploadTicketPhoto } from "@/services/supabaseService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import type { Location } from "@/types";
@@ -37,6 +38,18 @@ interface AIResult {
   confidence: number;
 }
 
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+function validatePhoneNumber(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const digits = trimmed.replace(/[\s-]/g, "");
+  if (!/^\+?\d{7,15}$/.test(digits)) {
+    return "Please enter a valid phone number (e.g. +91XXXXXXXXXX).";
+  }
+  return null;
+}
 
 export default function PublicReport() {
   const { qrId } = useParams<{ qrId: string }>();
@@ -50,7 +63,10 @@ export default function PublicReport() {
   const [ticketId, setTicketId] = useState<string | null>(null);
 
   const [description, setDescription] = useState("");
-  const [photoName, setPhotoName] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -60,6 +76,14 @@ export default function PublicReport() {
   const [manualCategory, setManualCategory] = useState<Category>("Other");
   const [manualArea, setManualArea] = useState<string>("");
   const [manualSeverity, setManualSeverity] = useState<Severity>("MEDIUM");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+    };
+  }, [photoPreview]);
 
   useEffect(() => {
     async function load() {
@@ -89,20 +113,84 @@ export default function PublicReport() {
     load();
   }, [qrId]);
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setPhotoError(null);
+    if (!file) {
+      setPhotoFile(null);
+      setPhotoPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      return;
+    }
+
+    if (!ALLOWED_TYPES.has(file.type)) {
+      setPhotoError("Invalid file type. Please select a JPG, PNG, or WEBP image.");
+      setPhotoFile(null);
+      setPhotoPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      setPhotoError("File is too large. Maximum size is 5 MB.");
+      setPhotoFile(null);
+      setPhotoPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    setPhotoFile(file);
+    const preview = URL.createObjectURL(file);
+    setPhotoPreview(preview);
+  };
+
+  const removePhoto = () => {
+    setPhotoFile(null);
+    setPhotoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPhotoError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        const base64 = result.split(",")[1] || "";
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error("Failed to read image file"));
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleAnalyze = async () => {
     if (!description.trim() || !qr) return;
     setAiLoading(true);
     setAiError(null);
     try {
+      const imagePayload = photoFile ? { data: await fileToBase64(photoFile), mimeType: photoFile.type } : undefined;
       const result = await analyzeIssue({
         description: description.trim(),
         organization: organizationName || qr.name,
         location: locationName || "",
         childLocations: childLocations.map((loc) => ({ id: loc.id, name: loc.name })),
+        image: imagePayload,
       });
       setAiResult(result);
       setUseManual(false);
-    } catch (err) {
+    } catch {
       setAiError("AI analysis is temporarily unavailable. You can submit manually.");
       setUseManual(true);
     } finally {
@@ -113,6 +201,13 @@ export default function PublicReport() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!description.trim() || !qr) return;
+
+    const phoneValidation = validatePhoneNumber(phoneNumber);
+    if (phoneValidation) {
+      setPhoneError(phoneValidation);
+      return;
+    }
+    setPhoneError(null);
 
     let finalCategory: string = manualCategory;
     let finalArea = manualArea;
@@ -134,23 +229,59 @@ export default function PublicReport() {
 
     setSubmitting(true);
     try {
-      const newTicketId = await createTicket({
-        qrId: qrId || "",
-        organizationId: qr.organizationId,
-        locationId: qr.locationId,
-        category: finalCategory,
-        subcategory: undefined,
-        title: finalTitle,
-        description: description.trim(),
-        reportedArea: finalArea || undefined,
-        severity: finalSeverity,
-        priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
-        status: "OPEN",
-        aiSummary: finalSummary,
-        aiConfidence: finalConfidence,
-        aiSuggestedAction: finalSuggestedAction || undefined,
-        photoUrl: undefined,
-      });
+      const newTicketId = generateTicketId();
+      let photoUrl: string | undefined;
+      const normalizedPhone = phoneNumber.trim() ? phoneNumber.trim() : undefined;
+
+      if (photoFile) {
+        try {
+          photoUrl = await uploadTicketPhoto(photoFile, newTicketId);
+        } catch (uploadError) {
+          console.error("[Ticket Submit] photo upload failed", uploadError);
+          setAiError("Photo upload failed. Please try again or submit without the photo.");
+          setSubmitting(false);
+          return;
+        }
+      }
+
+      await createTicket(
+        {
+          qrId: qrId || "",
+          organizationId: qr.organizationId,
+          locationId: qr.locationId,
+          category: finalCategory,
+          subcategory: undefined,
+          title: finalTitle,
+          description: description.trim(),
+          reportedArea: finalArea || undefined,
+          severity: finalSeverity,
+          priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+          status: "OPEN",
+          aiSummary: finalSummary,
+          aiConfidence: finalConfidence,
+          aiSuggestedAction: finalSuggestedAction || undefined,
+          photoUrl,
+          phoneNumber: normalizedPhone,
+        },
+        newTicketId
+      );
+
+      if (normalizedPhone) {
+        try {
+          await fetch("/api/send-whatsapp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              phoneNumber: normalizedPhone,
+              ticketId: newTicketId,
+              title: finalTitle,
+            }),
+          });
+        } catch (whatsappError) {
+          console.error("[Ticket Submit] WhatsApp notification failed", whatsappError);
+        }
+      }
+
       setTicketId(newTicketId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -227,6 +358,12 @@ export default function PublicReport() {
     );
   }
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-3.5rem)] px-4 py-8">
       <div className="w-full max-w-sm space-y-6">
@@ -267,16 +404,64 @@ export default function PublicReport() {
                 </label>
                 <input
                   id="photo"
+                  ref={fileInputRef}
                   type="file"
-                  accept="image/*"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    setPhotoName(file ? file.name : "");
-                  }}
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleFileChange}
                   className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
-                {photoName && (
-                  <p className="text-xs text-muted-foreground">Selected: {photoName}</p>
+                {photoError && (
+                  <p className="text-xs text-destructive">{photoError}</p>
+                )}
+                {photoFile && photoPreview && (
+                  <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                    <img
+                      src={photoPreview}
+                      alt="Preview"
+                      className="w-full h-40 object-cover rounded-md"
+                    />
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="truncate">{photoFile.name}</span>
+                      <span>{formatFileSize(photoFile.size)}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" className="flex-1" onClick={removePhoto}>
+                        Remove
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        Change Photo
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="phone" className="text-sm font-medium">
+                  WhatsApp Number (optional)
+                </label>
+                <input
+                  id="phone"
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={(e) => {
+                    setPhoneNumber(e.target.value);
+                    if (phoneError) setPhoneError(null);
+                  }}
+                  placeholder="+91XXXXXXXXXX"
+                  className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Add your WhatsApp number if you want ticket updates.
+                </p>
+                {phoneError && (
+                  <p className="text-xs text-destructive">{phoneError}</p>
                 )}
               </div>
 
@@ -288,7 +473,7 @@ export default function PublicReport() {
                   onClick={handleAnalyze}
                   disabled={aiLoading || !description.trim()}
                 >
-                  {aiLoading ? "AI is understanding your issue..." : "Analyze Issue"}
+                  {aiLoading ? "Analyzing your issue..." : "Analyze Issue"}
                 </Button>
               )}
 
@@ -302,6 +487,9 @@ export default function PublicReport() {
                 <div className="space-y-3 rounded-md border bg-muted/50 p-4">
                   <h3 className="text-sm font-semibold">AI Analysis Result</h3>
                   <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="font-medium">Title:</span> {aiResult.title}
+                    </div>
                     <div>
                       <span className="font-medium">Category:</span> {aiResult.category}
                     </div>

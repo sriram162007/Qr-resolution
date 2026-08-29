@@ -166,10 +166,12 @@ export default function AdminTickets() {
   const stats = useMemo(() => {
     const total = tickets.length;
     const open = tickets.filter((t) => t.status === "OPEN").length;
-    const highCritical = tickets.filter((t) => t.priority === "P1" || t.priority === "P2").length;
+    const triaged = tickets.filter((t) => t.status === "TRIAGED").length;
+    const assigned = tickets.filter((t) => t.status === "ASSIGNED").length;
     const inProgress = tickets.filter((t) => t.status === "IN_PROGRESS").length;
+    const highCritical = tickets.filter((t) => t.priority === "P1" || t.priority === "P2").length;
     const resolved = tickets.filter((t) => t.status === "RESOLVED" || t.status === "CLOSED").length;
-    return { total, open, highCritical, inProgress, resolved };
+    return { total, open, triaged, assigned, inProgress, highCritical, resolved };
   }, [tickets]);
 
   const toggleSort = (field: "createdAt" | "priority" | "status") => {
@@ -198,7 +200,7 @@ export default function AdminTickets() {
         </div>
       </div>
 
-      <div className="grid gap-4 mt-6 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 mt-6 sm:grid-cols-2 lg:grid-cols-7">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Tickets</CardTitle>
@@ -217,10 +219,18 @@ export default function AdminTickets() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">High / Critical</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Triaged</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">{stats.highCritical}</div>
+            <div className="text-2xl font-bold text-purple-600">{stats.triaged}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Assigned</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600">{stats.assigned}</div>
           </CardContent>
         </Card>
         <Card>
@@ -229,6 +239,14 @@ export default function AdminTickets() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-yellow-600">{stats.inProgress}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">High / Critical</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-red-600">{stats.highCritical}</div>
           </CardContent>
         </Card>
         <Card>
@@ -331,6 +349,7 @@ export default function AdminTickets() {
                       <th className="py-3 px-2">Title</th>
                       <th className="py-3 px-2">Category</th>
                       <th className="py-3 px-2">Location</th>
+                      <th className="py-3 px-2">Assigned</th>
                       <th className="py-3 px-2 cursor-pointer" onClick={() => toggleSort("priority")}>
                         <div className="flex items-center gap-1">
                           Priority <ArrowUpDown className="h-3 w-3" />
@@ -342,7 +361,7 @@ export default function AdminTickets() {
                           Status <ArrowUpDown className="h-3 w-3" />
                         </div>
                       </th>
-                      <th className="py-3 px-2">Created</th>
+                      <th className="py-3 px-2">Updated</th>
                       <th className="py-3 px-2">Actions</th>
                     </tr>
                   </thead>
@@ -355,6 +374,9 @@ export default function AdminTickets() {
                         <td className="py-3 px-2 max-w-[150px] truncate">
                           {locationCache[ticket.locationId] || ticket.locationId}
                         </td>
+                        <td className="py-3 px-2 max-w-[120px] truncate">
+                          {ticket.assignedToName || ticket.assignedTo || <span className="text-muted-foreground">-</span>}
+                        </td>
                         <td className="py-3 px-2">
                           <Badge variant={priorityColors[ticket.priority]}>{ticket.priority}</Badge>
                         </td>
@@ -364,7 +386,7 @@ export default function AdminTickets() {
                             {ticket.status.replace(/_/g, " ")}
                           </Badge>
                         </td>
-                        <td className="py-3 px-2">{ticket.createdAt.toLocaleDateString()}</td>
+                        <td className="py-3 px-2">{ticket.updatedAt.toLocaleDateString()}</td>
                         <td className="py-3 px-2">
                           <Button
                             variant="ghost"
@@ -398,12 +420,19 @@ export default function AdminTickets() {
                         {locationCache[ticket.locationId] || ticket.locationId}
                       </span>
                       <span>•</span>
-                      <span>{ticket.createdAt.toLocaleDateString()}</span>
+                      <span>{ticket.updatedAt.toLocaleDateString()}</span>
                     </div>
                     <div className="mt-3 flex items-center justify-between">
-                      <Badge variant={statusColors[ticket.status]} className="capitalize text-xs">
-                        {ticket.status.replace(/_/g, " ")}
-                      </Badge>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={statusColors[ticket.status]} className="capitalize text-xs">
+                          {ticket.status.replace(/_/g, " ")}
+                        </Badge>
+                        {ticket.assignedToName && (
+                          <span className="text-xs text-muted-foreground truncate max-w-[100px]">
+                            {ticket.assignedToName}
+                          </span>
+                        )}
+                      </div>
                       <Button
                         variant="outline"
                         size="sm"

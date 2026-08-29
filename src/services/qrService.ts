@@ -1,7 +1,6 @@
-import { db, app } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
 import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, serverTimestamp, query, where, collection, type DocumentData, type Timestamp } from "firebase/firestore";
 import type { QRCode } from "@/types";
-import { auth } from "@/lib/firebase";
 
 const COLLECTION = "qr_codes";
 
@@ -24,22 +23,11 @@ export async function createQRCode(data: Omit<QRCode, "id" | "createdAt" | "upda
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `qr_codes/${id}`,
-    dataKeys: Object.keys(payload),
-    hasUndefined: Object.values(payload).some(v => v === undefined)
-  });
-  console.log("[QR Create] before setDoc");
   try {
     await setDoc(ref, payload);
-    console.log("[QR Create] after setDoc");
-    console.log("[QR Create] service returning", { id });
     return id;
   } catch (error) {
-    console.error("[QR Create] WRITE FAILED", {
+    console.error("[QR Create] failed", {
       code: (error as { code?: string })?.code,
       message: (error as { message?: string })?.message,
       name: (error as { name?: string })?.name,
@@ -50,13 +38,9 @@ export async function createQRCode(data: Omit<QRCode, "id" | "createdAt" | "upda
 
 export async function getQRCode(qrId: string): Promise<QRCode | null> {
   const ref = doc(db, COLLECTION, qrId);
-  console.log("[Public QR Debug] firestore path", { path: `qr_codes/${qrId}` });
-  console.log("[Public QR Debug] projectId", { projectId: app.options.projectId });
   const snap = await getDoc(ref);
-  console.log("[Public QR Debug] exists", { exists: snap.exists });
   if (!snap.exists()) return null;
   const raw = { id: snap.id, ...snap.data() };
-  console.log("[Public QR Debug] raw data", { raw });
   return toDates(raw);
 }
 
@@ -68,20 +52,13 @@ export async function getQRCodes(organizationId: string): Promise<QRCode[]> {
 
 export async function updateQRCode(qrId: string, data: Partial<QRCode>): Promise<void> {
   const ref = doc(db, COLLECTION, qrId);
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `qr_codes/${qrId}`
-  });
   try {
     await updateDoc(ref, {
       ...data,
       updatedAt: serverTimestamp(),
     });
-    console.log("[QR Update] WRITE SUCCESS");
   } catch (error) {
-    console.error("[QR Update] WRITE FAILED", {
+    console.error("[QR Update] failed", {
       code: (error as { code?: string })?.code,
       message: (error as { message?: string })?.message,
       name: (error as { name?: string })?.name,
@@ -96,17 +73,10 @@ export async function setQRCodeActive(qrId: string, isActive: boolean): Promise<
 
 export async function deleteQRCode(qrId: string): Promise<void> {
   const ref = doc(db, COLLECTION, qrId);
-  console.log("[Firestore Debug] before write", {
-    uid: auth.currentUser?.uid ?? null,
-    email: auth.currentUser?.email ?? null,
-    authenticated: !!auth.currentUser,
-    path: `qr_codes/${qrId}`
-  });
   try {
     await deleteDoc(ref);
-    console.log("[QR Delete] WRITE SUCCESS");
   } catch (error) {
-    console.error("[QR Delete] WRITE FAILED", {
+    console.error("[QR Delete] failed", {
       code: (error as { code?: string })?.code,
       message: (error as { message?: string })?.message,
       name: (error as { name?: string })?.name,

@@ -32,7 +32,12 @@ export default defineConfig({
       name: "api-proxy",
       configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
-          if (!req.url?.startsWith("/api/analyze-issue")) {
+          const url = req.url || "";
+          if (
+            !url.startsWith("/api/analyze-issue") &&
+            !url.startsWith("/api/suggest-resolution") &&
+            !url.startsWith("/api/send-whatsapp")
+          ) {
             return next();
           }
 
@@ -42,22 +47,50 @@ export default defineConfig({
             }
 
             const originalGeminiKey = process.env.GEMINI_API_KEY;
+            const originalTwilioSid = process.env.TWILIO_ACCOUNT_SID;
+            const originalTwilioToken = process.env.TWILIO_AUTH_TOKEN;
+            const originalTwilioFrom = process.env.TWILIO_WHATSAPP_FROM;
             if (!originalGeminiKey && loadedEnv.GEMINI_API_KEY) {
               process.env.GEMINI_API_KEY = loadedEnv.GEMINI_API_KEY;
             }
+            if (!originalTwilioSid && loadedEnv.TWILIO_ACCOUNT_SID) {
+              process.env.TWILIO_ACCOUNT_SID = loadedEnv.TWILIO_ACCOUNT_SID;
+            }
+            if (!originalTwilioToken && loadedEnv.TWILIO_AUTH_TOKEN) {
+              process.env.TWILIO_AUTH_TOKEN = loadedEnv.TWILIO_AUTH_TOKEN;
+            }
+            if (!originalTwilioFrom && loadedEnv.TWILIO_WHATSAPP_FROM) {
+              process.env.TWILIO_WHATSAPP_FROM = loadedEnv.TWILIO_WHATSAPP_FROM;
+            }
 
             try {
-              const handler = (await import("./api/analyze-issue.ts")).default;
+              let handler: (req: any, res: any) => Promise<void>;
+              if (url.startsWith("/api/send-whatsapp")) {
+                handler = (await import("./api/send-whatsapp.ts")).default;
+              } else if (url.startsWith("/api/suggest-resolution")) {
+                handler = (await import("./api/suggest-resolution.ts")).default;
+              } else {
+                handler = (await import("./api/analyze-issue.ts")).default;
+              }
               await handler(req, res as any);
             } finally {
               if (!originalGeminiKey) {
                 delete process.env.GEMINI_API_KEY;
               }
+              if (!originalTwilioSid) {
+                delete process.env.TWILIO_ACCOUNT_SID;
+              }
+              if (!originalTwilioToken) {
+                delete process.env.TWILIO_AUTH_TOKEN;
+              }
+              if (!originalTwilioFrom) {
+                delete process.env.TWILIO_WHATSAPP_FROM;
+              }
             }
           } catch (err) {
             console.error("[API Proxy] Failed to load handler", err);
             res.statusCode = 500;
-            res.end(JSON.stringify({ message: "AI analysis is temporarily unavailable." }));
+            res.end(JSON.stringify({ message: "Service is temporarily unavailable." }));
           }
         });
       },

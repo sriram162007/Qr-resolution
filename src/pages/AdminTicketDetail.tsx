@@ -1,25 +1,31 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { getTicket, setTicketStatus, setTicketAssignment } from "@/services/ticketService";
+import { getTicket, getTicketActivities, updateTicketDetail } from "@/services/ticketService";
 import { getLocation } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
+import { getUsers } from "@/services/ticketService";
+import { suggestResolution } from "@/services/aiResolutionService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { ArrowLeft, MapPin } from "lucide-react";
-import type { Ticket, TicketStatus } from "@/types";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowLeft, MapPin, X, Loader2, Sparkles } from "lucide-react";
+import type { Ticket, TicketStatus, TicketPriority, TicketSeverity, TicketActivity } from "@/types";
 
-const STATUS_FLOW: Record<TicketStatus, TicketStatus[]> = {
-  OPEN: ["TRIAGED"],
-  TRIAGED: ["ASSIGNED"],
-  ASSIGNED: ["IN_PROGRESS"],
-  IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED"],
-  CLOSED: [],
+const STATUSES: TicketStatus[] = ["OPEN", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED"];
+const PRIORITIES: TicketPriority[] = ["P1", "P2", "P3", "P4"];
+const SEVERITIES: TicketSeverity[] = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+const priorityColors: Record<TicketPriority, "destructive" | "warning" | "secondary" | "outline"> = {
+  P1: "destructive",
+  P2: "warning",
+  P3: "secondary",
+  P4: "outline",
 };
+
+const STATUS_STEPS: TicketStatus[] = ["OPEN", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 
 export default function AdminTicketDetail() {
   const { ticketId } = useParams<{ ticketId: string }>();
@@ -31,8 +37,29 @@ export default function AdminTicketDetail() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [assignee, setAssignee] = useState("");
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
   const [status, setStatus] = useState<TicketStatus | "">("");
+  const [priority, setPriority] = useState<TicketPriority | "">("");
+  const [severity, setSeverity] = useState<TicketSeverity | "">("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [assignedToName, setAssignedToName] = useState("");
+  const [resolutionNotes, setResolutionNotes] = useState("");
+  const [resolutionSummary, setResolutionSummary] = useState("");
+
+  const [users, setUsers] = useState<Array<{ id: string; email: string | null }>>([]);
+  const [activities, setActivities] = useState<TicketActivity[]>([]);
+
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<{
+    likelyCause: string;
+    recommendedAction: string;
+    requiredTeam: string;
+    estimatedUrgency: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+    resolutionSteps: string[];
+    safetyNote: string;
+  } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -41,68 +68,138 @@ export default function AdminTicketDetail() {
   }, [user, authLoading, navigate]);
 
   useEffect(() => {
-    async function load() {
+    if (!ticketId) return;
+    let cancelled = false;
+    async function doLoad() {
       if (!ticketId) return;
       setLoading(true);
       setError(null);
       setSuccess(null);
       try {
         const data = await getTicket(ticketId);
-        if (!data) {
-          setError("Ticket not found");
-          return;
+        if (!cancelled) {
+          if (!data) {
+            setError("Ticket not found");
+            return;
+          }
+          setTicket(data);
+          setStatus(data.status);
+          setPriority(data.priority);
+          setSeverity(data.severity);
+          setAssignedTo(data.assignedTo || "");
+          setAssignedToName(data.assignedToName || "");
+          setResolutionNotes(data.resolutionNotes || "");
+          setResolutionSummary(data.resolutionSummary || "");
+          const loc = await getLocation(data.locationId);
+          if (loc) setLocationName(getLocationPath([loc], loc.id));
         }
-        setTicket(data);
-        setStatus(data.status);
-        setAssignee(data.assignedTo || "");
-        const loc = await getLocation(data.locationId);
-        if (loc) setLocationName(getLocationPath([loc], loc.id));
       } catch {
-        setError("Failed to load ticket");
+        if (!cancelled) setError("Failed to load ticket");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
-    load();
+    doLoad();
+    return () => { cancelled = true; };
   }, [ticketId]);
 
-  const handleStatusChange = async (newStatus: string) => {
-    if (!ticket || !newStatus) return;
-    const current = ticket.status;
-    const allowed = STATUS_FLOW[current] || [];
-    if (!allowed.includes(newStatus as TicketStatus)) {
-      setError(`Invalid status transition: ${current} → ${newStatus}`);
-      return;
+  useEffect(() => {
+    let cancelled = false;
+    async function doLoadUsers() {
+      try {
+        const list = await getUsers();
+        if (!cancelled) setUsers(list);
+      } catch {
+        if (!cancelled) setUsers([]);
+      }
     }
+    doLoadUsers();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!ticketId) return;
+    let cancelled = false;
+    async function doLoadActivities() {
+      if (!ticketId) return;
+      try {
+        const list = await getTicketActivities(ticketId);
+        if (!cancelled) setActivities(list);
+      } catch {
+        if (!cancelled) setActivities([]);
+      }
+    }
+    doLoadActivities();
+    return () => { cancelled = true; };
+  }, [ticketId]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ticket || !ticketId) return;
     setSaving(true);
     setError(null);
     setSuccess(null);
     try {
-      await setTicketStatus(ticket.id, newStatus as TicketStatus);
-      setSuccess("Status updated successfully");
-      setTicket({ ...ticket, status: newStatus as TicketStatus, updatedAt: new Date() });
-      setStatus(newStatus as TicketStatus);
-    } catch {
-      setError("Failed to update status");
+      const actor = { id: user?.email || undefined, name: user?.email || undefined };
+      await updateTicketDetail(ticket.id, {
+        status: status || undefined,
+        priority: priority || undefined,
+        severity: severity || undefined,
+        assignedTo: assignedTo || undefined,
+        assignedToName: assignedToName || undefined,
+        resolutionNotes: resolutionNotes || undefined,
+        resolutionSummary: resolutionSummary || undefined,
+      }, actor);
+      setSuccess("Ticket updated successfully");
+      const data = await getTicket(ticketId);
+      if (data) {
+        setTicket(data);
+        setStatus(data.status);
+        setPriority(data.priority);
+        setSeverity(data.severity);
+        setAssignedTo(data.assignedTo || "");
+        setAssignedToName(data.assignedToName || "");
+        setResolutionNotes(data.resolutionNotes || "");
+        setResolutionSummary(data.resolutionSummary || "");
+      }
+      const acts = await getTicketActivities(ticketId);
+      setActivities(acts);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setError(message);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleAssignmentChange = async () => {
+  const handleAiSuggest = async () => {
     if (!ticket) return;
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuggestion(null);
     try {
-      await setTicketAssignment(ticket.id, assignee || undefined);
-      setSuccess(ticket.assignedTo ? "Assignment updated" : "Assignment cleared");
-      setTicket({ ...ticket, assignedTo: assignee || undefined, updatedAt: new Date() });
+      const result = await suggestResolution({
+        title: ticket.title,
+        description: ticket.description,
+        category: ticket.category,
+        subcategory: ticket.subcategory,
+        reportedArea: ticket.reportedArea,
+        severity: ticket.severity,
+        priority: ticket.priority,
+        aiSummary: ticket.aiSummary,
+        aiSuggestedAction: ticket.aiSuggestedAction,
+      });
+      setAiSuggestion(result);
     } catch {
-      setError("Failed to update assignment");
+      setAiError("Resolution assistant is temporarily unavailable.");
     } finally {
-      setSaving(false);
+      setAiLoading(false);
     }
+  };
+
+  const useSuggestedAction = () => {
+    if (!aiSuggestion) return;
+    setResolutionSummary(aiSuggestion.recommendedAction);
   };
 
   if (authLoading || !user) {
@@ -141,16 +238,10 @@ export default function AdminTicketDetail() {
     );
   }
 
-  const allowedNext = STATUS_FLOW[ticket.status] || [];
-  const priorityColors: Record<string, string> = {
-    P1: "destructive",
-    P2: "warning",
-    P3: "secondary",
-    P4: "outline",
-  };
+  const currentStatusIndex = STATUS_STEPS.indexOf(ticket.status);
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="flex items-center gap-4 mb-6">
         <Button variant="ghost" size="icon" onClick={() => navigate("/admin/tickets")}>
           <ArrowLeft className="h-4 w-4" />
@@ -172,8 +263,8 @@ export default function AdminTicketDetail() {
         </div>
       )}
 
-      <div className="grid gap-6 md:grid-cols-3">
-        <div className="md:col-span-2 space-y-6">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2 space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Issue</CardTitle>
@@ -199,10 +290,21 @@ export default function AdminTicketDetail() {
                 )}
                 <div className="col-span-2 flex items-center gap-1">
                   <MapPin className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-muted-foreground">
-                    {locationName || ticket.locationId}
-                  </span>
+                  <span className="text-muted-foreground">{locationName || ticket.locationId}</span>
                 </div>
+                {ticket.photoUrl && (
+                  <div className="col-span-2">
+                    <span className="font-medium">Issue Photo</span>
+                    <div className="mt-2">
+                      <img
+                        src={ticket.photoUrl}
+                        alt="Issue photo"
+                        className="max-h-48 w-full rounded-md border object-cover cursor-pointer"
+                        onClick={() => setLightbox(ticket.photoUrl!)}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -230,47 +332,83 @@ export default function AdminTicketDetail() {
               </CardContent>
             </Card>
           )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Ticket Progress</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                {STATUS_STEPS.map((step, idx) => (
+                  <div key={step} className="flex flex-1 items-center">
+                    <div className="flex flex-col items-center">
+                      <div
+                        className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-semibold ${
+                          idx <= currentStatusIndex
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-muted-foreground/30 text-muted-foreground"
+                        }`}
+                      >
+                        {idx <= currentStatusIndex ? "✓" : idx + 1}
+                      </div>
+                      <span className="mt-1 text-xs text-muted-foreground hidden sm:block">{step.replace(/_/g, " ")}</span>
+                    </div>
+                    {idx < STATUS_STEPS.length - 1 && (
+                      <div
+                        className={`h-0.5 flex-1 mx-1 ${
+                          idx < currentStatusIndex ? "bg-primary" : "bg-muted-foreground/30"
+                        }`}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Activity</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {activities.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No activity yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {activities.map((a) => (
+                    <div key={a.id} className="flex items-start justify-between gap-3 text-sm">
+                      <div>
+                        <span className="font-medium">{a.message}</span>
+                        {a.changedByName && (
+                          <span className="text-muted-foreground"> by {a.changedByName}</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {a.createdAt.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Status & Priority</CardTitle>
+              <CardTitle>Ticket Actions</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Current Status</label>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline" className="text-xs">
-                    {ticket.status.replace(/_/g, " ")}
-                  </Badge>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Priority</label>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant={priorityColors[ticket.priority] as any} className="text-xs">
-                    {ticket.priority}
-                  </Badge>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Severity</label>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline" className="text-xs">
-                    {ticket.severity}
-                  </Badge>
-                </div>
-              </div>
-              {allowedNext.length > 0 && (
+            <CardContent>
+              <form onSubmit={handleSave} className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Update Status</label>
-                  <Select value={status} onValueChange={handleStatusChange} disabled={saving}>
+                  <label className="text-sm font-medium">Status</label>
+                  <Select value={status} onValueChange={(v) => setStatus(v as TicketStatus)} disabled={saving}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select next status" />
+                      <SelectValue placeholder="Select status" />
                     </SelectTrigger>
                     <SelectContent>
-                      {allowedNext.map((s) => (
+                      {STATUSES.map((s) => (
                         <SelectItem key={s} value={s}>
                           {s.replace(/_/g, " ")}
                         </SelectItem>
@@ -278,54 +416,183 @@ export default function AdminTicketDetail() {
                     </SelectContent>
                   </Select>
                 </div>
-              )}
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Priority</label>
+                  <Select value={priority} onValueChange={(v) => setPriority(v as TicketPriority)} disabled={saving}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select priority" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PRIORITIES.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Severity</label>
+                  <Select value={severity} onValueChange={(v) => setSeverity(v as TicketSeverity)} disabled={saving}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select severity" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SEVERITIES.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s.replace(/_/g, " ")}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Assigned To</label>
+                  <Select
+                    value={assignedTo}
+                    onValueChange={(v) => {
+                      setAssignedTo(v);
+                      const found = users.find((u) => u.id === v);
+                      setAssignedToName(found?.email || "");
+                    }}
+                    disabled={saving}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select staff" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Unassigned</SelectItem>
+                      {users.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.email || u.id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Resolution Notes</label>
+                  <Textarea
+                    value={resolutionNotes}
+                    onChange={(e) => setResolutionNotes(e.target.value)}
+                    placeholder="Add notes about the resolution..."
+                    disabled={saving}
+                    rows={4}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Resolution Summary</label>
+                  <Textarea
+                    value={resolutionSummary}
+                    onChange={(e) => setResolutionSummary(e.target.value)}
+                    placeholder="Public-facing resolution summary..."
+                    disabled={saving}
+                    rows={3}
+                  />
+                </div>
+
+                <Button type="submit" className="w-full" disabled={saving}>
+                  {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Changes
+                </Button>
+              </form>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Assignment</CardTitle>
+              <CardTitle>AI Resolution Assistant</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Assigned To</label>
-                <div className="flex gap-2">
-                  <Input
-                    value={assignee}
-                    onChange={(e) => setAssignee(e.target.value)}
-                    placeholder="Enter name or email"
-                    disabled={saving}
-                  />
-                  <Button size="sm" onClick={handleAssignmentChange} disabled={saving}>
-                    Save
+            <CardContent className="space-y-4">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleAiSuggest}
+                disabled={aiLoading}
+              >
+                {aiLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Generate Resolution Suggestion
+                  </>
+                )}
+              </Button>
+              {aiError && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive">
+                  {aiError}
+                </div>
+              )}
+              {aiSuggestion && (
+                <div className="space-y-3 rounded-md border bg-muted/50 p-4">
+                  <div className="text-sm space-y-2">
+                    <div>
+                      <span className="font-medium">Likely Cause:</span> {aiSuggestion.likelyCause}
+                    </div>
+                    <div>
+                      <span className="font-medium">Recommended Action:</span> {aiSuggestion.recommendedAction}
+                    </div>
+                    <div>
+                      <span className="font-medium">Required Team:</span> {aiSuggestion.requiredTeam}
+                    </div>
+                    <div>
+                      <span className="font-medium">Urgency:</span>{" "}
+                      <Badge variant={priorityColors[aiSuggestion.estimatedUrgency as TicketPriority] || "outline"}>
+                        {aiSuggestion.estimatedUrgency}
+                      </Badge>
+                    </div>
+                    <div>
+                      <span className="font-medium">Resolution Steps:</span>
+                      <ul className="list-disc pl-4 mt-1 space-y-1">
+                        {aiSuggestion.resolutionSteps.map((step, i) => (
+                          <li key={i}>{step}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <span className="font-medium">Safety Note:</span> {aiSuggestion.safetyNote}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="w-full"
+                    onClick={useSuggestedAction}
+                  >
+                    Use Suggested Action
                   </Button>
                 </div>
-                {!assignee && (
-                  <p className="text-xs text-muted-foreground">
-                    Staff management integration pending.
-                  </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Timeline</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div>
-                <span className="font-medium">Created:</span>{" "}
-                {ticket.createdAt.toLocaleString()}
-              </div>
-              <div>
-                <span className="font-medium">Updated:</span>{" "}
-                {ticket.updatedAt.toLocaleString()}
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {lightbox && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="relative max-h-[90vh] max-w-[90vw]">
+            <img src={lightbox} alt="Issue photo enlarged" className="max-h-[90vh] max-w-[90vw] rounded-md object-contain" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute -top-10 right-0 text-white hover:text-white"
+              onClick={() => setLightbox(null)}
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
