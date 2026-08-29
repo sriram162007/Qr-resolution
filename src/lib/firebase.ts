@@ -1,7 +1,7 @@
-import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+import { initializeApp, type FirebaseApp } from "firebase/app";
+import { getAuth, type Auth } from "firebase/auth";
+import { getFirestore, type Firestore } from "firebase/firestore";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,13 +12,27 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+function isFirebaseConfigured(): boolean {
+  return !!firebaseConfig.apiKey && !!firebaseConfig.authDomain && !!firebaseConfig.projectId;
+}
 
-console.log("[Firebase Debug] projectId", app.options.projectId);
-console.log("[Firebase Debug] authDomain", app.options.authDomain);
+let app: FirebaseApp | null = null;
+let authInstance: Auth | null = null;
+let dbInstance: Firestore | null = null;
+let storageInstance: FirebaseStorage | null = null;
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+if (isFirebaseConfigured()) {
+  try {
+    app = initializeApp(firebaseConfig);
+    authInstance = getAuth(app);
+    dbInstance = getFirestore(app);
+    storageInstance = getStorage(app);
+  } catch (e) {
+    console.error("[Firebase] Initialization failed:", e);
+  }
+}
 
+export const auth = authInstance as Auth;
+export const db = dbInstance as Firestore;
+export const storage = storageInstance as FirebaseStorage;
 export { app };

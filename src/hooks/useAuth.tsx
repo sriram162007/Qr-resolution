@@ -23,10 +23,13 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!auth) {
+      return;
+    }
     const unsubscribe = onAuthStateChanged(
       auth,
       (firebaseUser: FirebaseUser | null) => {
@@ -43,6 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
+    if (!auth) {
+      setError("Authentication is not configured.");
+      return;
+    }
     setError(null);
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
@@ -63,6 +70,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    if (!auth) {
+      setUser(null);
+      setError(null);
+      return;
+    }
     await signOut(auth);
     setUser(null);
     setError(null);
