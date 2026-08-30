@@ -182,6 +182,15 @@ export default function AdminTicketDetail() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
+          }).then((response) => {
+            if (!response.ok) {
+              response.text().then((text) => {
+                console.error("[Ticket Update] WhatsApp API error", {
+                  status: response.status,
+                  body: text,
+                });
+              });
+            }
           }).catch((whatsappError) => {
             console.error("[Ticket Update] WhatsApp notification failed", whatsappError);
           });

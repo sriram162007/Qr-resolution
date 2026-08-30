@@ -268,7 +268,7 @@ export default function PublicReport() {
 
       if (normalizedPhone) {
         try {
-          await fetch("/api/send-whatsapp", {
+          const response = await fetch("/api/send-whatsapp", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -280,6 +280,13 @@ export default function PublicReport() {
               status: "OPEN",
             }),
           });
+          if (!response.ok) {
+            const text = await response.text();
+            console.error("[Ticket Submit] WhatsApp API error", {
+              status: response.status,
+              body: text,
+            });
+          }
         } catch (whatsappError) {
           console.error("[Ticket Submit] WhatsApp notification failed", whatsappError);
         }

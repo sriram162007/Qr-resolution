@@ -46,7 +46,14 @@ export async function createTicket(data: Omit<Ticket, "id" | "ticketId" | "creat
   };
   try {
     await setDoc(ref, payload);
-    await addActivity(id, "created", "Ticket created", cleanData.lastUpdatedBy, cleanData.lastUpdatedByName);
+    try {
+      await addActivity(id, "created", "Ticket created", cleanData.lastUpdatedBy, cleanData.lastUpdatedByName);
+    } catch (activityError) {
+      console.warn("[Ticket Create] activity log skipped", {
+        ticketId: id,
+        message: activityError instanceof Error ? activityError.message : "Unknown",
+      });
+    }
     return id;
   } catch (error) {
     console.error("[Ticket Create] failed", {
