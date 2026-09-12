@@ -5,11 +5,16 @@ type WhatsAppRequest = {
   ticketId: string;
   type: "created" | "updated" | "status_changed";
   title?: string;
+  category?: string;
   priority?: string;
   status?: string;
   changes?: string[];
   resolutionNotes?: string;
   assignedToName?: string;
+  estimatedResolution?: string;
+  trackingUrl?: string;
+  resolvedInMins?: number;
+  currentActivity?: string;
 };
 
 function maskRecipient(phoneNumber: string): string {
@@ -52,54 +57,150 @@ function normalizePhoneNumber(value: string): string | null {
   return null;
 }
 
+function formatResolvedIn(mins: number): string {
+  if (mins < 1) return "under 1 min";
+  if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"}`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/**
+ * Build a contextual, emoji-rich WhatsApp message body for each ticket lifecycle event.
+ * All messages include a tracking link when available.
+ * Kept within WhatsApp's 1600-character body limit.
+ */
 function buildBody(body: Partial<WhatsAppRequest>): string {
   const ticketId = body.ticketId || "";
   const status = (body.status || "").toUpperCase();
+  const estimate = body.estimatedResolution
+    ? `⏱️ *Estimated:* ${body.estimatedResolution}`
+    : "";
+  const trackLink = body.trackingUrl
+    ? `🔗 *Track:* ${body.trackingUrl}`
+    : "";
 
+  // ── TICKET CREATED ──────────────────────────────────────────────────────
   if (body.type === "created") {
-    return `Your ticket ${ticketId} has been created successfully.\n\nStatus: ${status || "OPEN"}\nPriority: ${body.priority || "N/A"}`;
+    const lines: string[] = [
+      `🎫 *Complaint Registered*`,
+      ``,
+      `Ticket: *${ticketId}*`,
+      body.category ? `📂 ${body.category}` : "",
+      body.priority ? `🔴 Priority: ${body.priority}` : "",
+      ``,
+      `🤖 AI analysis is in progress.`,
+    ];
+    if (estimate) lines.push(``, estimate);
+    if (trackLink) lines.push(``, trackLink);
+    return lines.filter((l) => l !== undefined).join("\n");
   }
 
+  // ── RESOLVED ────────────────────────────────────────────────────────────
   if (status === "RESOLVED") {
-    const notes = body.resolutionNotes && body.resolutionNotes.trim().length > 0
-      ? `\nResolution: ${body.resolutionNotes.trim()}`
-      : "";
-    return `Your ticket ${ticketId} has been resolved.${notes}`;
+    const resolvedStr =
+      body.resolvedInMins != null
+        ? `⏱️ *Resolved in:* ${formatResolvedIn(body.resolvedInMins)}`
+        : "";
+    const notes =
+      body.resolutionNotes && body.resolutionNotes.trim()
+        ? `\n✏️ ${body.resolutionNotes.trim()}`
+        : "";
+    const lines: string[] = [
+      `🎉 *Complaint Resolved*`,
+      ``,
+      `Ticket *${ticketId}* has been successfully resolved.🟢`,
+      notes,
+    ];
+    if (resolvedStr) lines.push(``, resolvedStr);
+    if (trackLink) lines.push(``, trackLink);
+    lines.push(``, `Please verify the resolution. Reply if you need further help.`);
+    return lines.join("\n");
   }
+
+  // ── CLOSED ──────────────────────────────────────────────────────────────
   if (status === "CLOSED") {
-    return `Your ticket ${ticketId} has been closed.`;
+    const lines: string[] = [
+      `🔒 *Complaint Closed*`,
+      ``,
+      `Ticket *${ticketId}* is now closed.`,
+      ``,
+      `Thank you for using our support service.`,
+      `⭐ We hope your issue was resolved to your satisfaction.`,
+    ];
+    if (trackLink) lines.push(``, trackLink);
+    return lines.join("\n");
   }
+
+  // ── TRIAGED ─────────────────────────────────────────────────────────────
   if (status === "TRIAGED") {
-    return `Your ticket ${ticketId} has been reviewed and is now being processed.`;
+    const lines: string[] = [
+      `🤖 *Complaint Analyzed*`,
+      ``,
+      `Ticket *${ticketId}* has been reviewed and categorized.`,
+      ...(body.category ? ["", `📂 ${body.category}`] : []),
+      body.priority ? `🔴 Priority: ${body.priority}` : "",
+    ];
+    if (estimate) lines.push(``, estimate);
+    if (trackLink) lines.push(``, trackLink);
+    return lines.filter((l) => l !== undefined).join("\n");
   }
+
+  // ── ASSIGNED ────────────────────────────────────────────────────────────
   if (status === "ASSIGNED") {
-    const assignee = body.assignedToName && body.assignedToName.trim().length > 0
-      ? ` to ${body.assignedToName.trim()}`
-      : "";
-    return `Your ticket ${ticketId} has been assigned${assignee}.`;
+    const agent =
+      body.assignedToName && body.assignedToName.trim()
+        ? `👨‍💻 *Agent:* ${body.assignedToName.trim()}`
+        : "";
+    const lines: string[] = [
+      `👨‍💻 *Support Agent Assigned*`,
+      ``,
+      `Your complaint *${ticketId}* has been assigned to our support team.`,
+      ...(agent ? ["", agent] : []),
+    ];
+    if (estimate) lines.push(``, estimate);
+    if (trackLink) lines.push(``, trackLink);
+    return lines.filter((l) => l !== undefined).join("\n");
   }
+
+  // ── IN_PROGRESS ─────────────────────────────────────────────────────────
   if (status === "IN_PROGRESS") {
-    return `Your ticket ${ticketId} is now being worked on.`;
+    const act = body.currentActivity
+      ? body.currentActivity.trim()
+      : "Our support team is currently investigating the issue.";
+    const lines: string[] = [
+      `🔍 *Investigation In Progress*`,
+      ``,
+      `We are actively working on *${ticketId}*.`,
+      ``,
+      `📝 *Current activity:*`,
+      act,
+    ];
+    if (estimate) lines.push(``, estimate);
+    if (trackLink) lines.push(``, trackLink);
+    return lines.join("\n");
   }
 
-  const changes = body.changes && body.changes.length > 0 ? body.changes.join(", ") : null;
-  const lines: string[] = [];
-  lines.push(`Your ticket ${ticketId} has been updated.`);
+  // ── GENERIC STATUS_CHANGED / UPDATED ────────────────────────────────────
+  const act = body.currentActivity
+    ? `\n📝 *Update:* ${body.currentActivity.trim()}`
+    : "";
+  const changes =
+    body.changes && body.changes.length > 0
+      ? `\nUpdated: ${body.changes.join(", ")}`
+      : "";
 
-  if (status || changes) {
-    lines.push("");
-    if (status) {
-      lines.push(`Status: ${status}`);
-    }
-    if (changes) {
-      lines.push(`Updated: ${changes}`);
-    }
-  }
-
-  lines.push("");
-  lines.push("Our team is currently working on your issue.");
-
-  return lines.join("\n");
+  const lines: string[] = [
+    `📋 *Complaint Update*`,
+    ``,
+    `Your ticket *${ticketId}* has been updated.`,
+    status ? `\n🔄 Status: ${status}` : "",
+    changes,
+    act,
+  ];
+  if (estimate) lines.push(``, estimate);
+  if (trackLink) lines.push(``, trackLink);
+  return lines.filter((l) => l !== undefined).join("\n");
 }
 
 export default async function handler(req: any, res: any) {
@@ -153,15 +254,14 @@ export default async function handler(req: any, res: any) {
   const messageBody = buildBody(body);
 
   const toNumber = `whatsapp:${normalizedPhone}`;
-  const from = fromNumber.startsWith("whatsapp:")
-    ? fromNumber
-    : `whatsapp:${fromNumber}`;
+  const from = fromNumber.startsWith("whatsapp:") ? fromNumber : `whatsapp:${fromNumber}`;
 
   console.log("[WhatsApp API] Sending notification", {
     ticketId: body.ticketId,
     type: body.type,
+    status: body.status,
     recipient: maskedRecipient,
-    normalizedDestination: maskRecipient(toNumber),
+    hasTrackingUrl: !!body.trackingUrl,
   });
 
   try {

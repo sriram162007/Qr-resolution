@@ -90,6 +90,14 @@ export interface Ticket {
   phoneNumber?: string;
   createdAt: Date;
   updatedAt: Date;
+  /** Secure random token stored at creation — used to validate public /track/:id/:token links. */
+  trackingToken?: string;
+  /** Admin-settable human message shown to the customer on the tracking page. */
+  currentActivity?: string;
+  /** Range string e.g. "20-30" representing estimated minutes to resolution. */
+  estimatedResolutionMins?: string;
+  /** Actual elapsed minutes from creation to resolution. Computed on RESOLVED transition. */
+  resolvedInMins?: number;
 }
 
 export interface TicketActivity {

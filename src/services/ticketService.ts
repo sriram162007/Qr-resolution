@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase";
-import { doc, setDoc, getDoc, getDocs, updateDoc, serverTimestamp, query, where, collection, orderBy, type DocumentData, type Timestamp } from "firebase/firestore";
+import { doc, setDoc, getDoc, getDocs, updateDoc, onSnapshot, serverTimestamp, query, where, collection, orderBy, type DocumentData, type Timestamp } from "firebase/firestore";
 import type { Ticket, TicketActivity } from "@/types";
 
 const TICKETS_COLLECTION = "tickets";
@@ -20,6 +20,41 @@ export function canTransition(from: Ticket["status"], to: Ticket["status"]): boo
 
 export function generateTicketId(): string {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
+/**
+ * Generates a cryptographically random 32-character hex token for public tracking links.
+ * Stored on the ticket document; validated client-side on the /track/:id/:token page.
+ */
+export function generateTrackingToken(): string {
+  const array = new Uint8Array(16);
+  crypto.getRandomValues(array);
+  return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Subscribe to real-time Firestore updates for a single ticket.
+ * Returns an unsubscribe function — call it in a useEffect cleanup.
+ */
+export function subscribeToTicket(
+  ticketId: string,
+  callback: (ticket: import("@/types").Ticket | null) => void,
+): () => void {
+  const ref = doc(db, TICKETS_COLLECTION, ticketId);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        callback(null);
+        return;
+      }
+      callback(toDates({ id: snap.id, ...snap.data() }));
+    },
+    (err) => {
+      console.error("[Ticket Subscribe] snapshot error", { ticketId, message: err.message });
+      callback(null);
+    },
+  );
 }
 
 function toDates(data: DocumentData & { createdAt?: Timestamp; updatedAt?: Timestamp }): Ticket {
@@ -120,6 +155,8 @@ export async function updateTicketDetail(ticketId: string, data: {
   assignedToName?: string;
   resolutionNotes?: string;
   resolutionSummary?: string;
+  currentActivity?: string;
+  estimatedResolutionMins?: string;
 }, actor?: { id?: string; name?: string }): Promise<void> {
   const current = await getTicket(ticketId);
   if (!current) throw new Error("Ticket not found");
@@ -134,6 +171,11 @@ export async function updateTicketDetail(ticketId: string, data: {
   const updates: Record<string, unknown> = { ...cleanData, updatedAt: serverTimestamp() };
   if (data.status === "RESOLVED") {
     updates.resolvedAt = serverTimestamp();
+    // Compute actual resolution time in minutes from ticket creation
+    if (current.createdAt) {
+      const mins = Math.round((Date.now() - current.createdAt.getTime()) / 60000);
+      updates.resolvedInMins = Math.max(mins, 1);
+    }
   }
   if (data.status === "CLOSED") {
     updates.closedAt = serverTimestamp();
@@ -150,6 +192,9 @@ export async function updateTicketDetail(ticketId: string, data: {
   }
   if (data.resolutionNotes !== undefined && data.resolutionNotes !== current.resolutionNotes) {
     await addActivity(ticketId, "resolution", "Resolution notes updated", actor?.id, actor?.name);
+  }
+  if (data.currentActivity !== undefined && data.currentActivity !== current.currentActivity) {
+    await addActivity(ticketId, "activity_update", `Activity updated: ${data.currentActivity}`, actor?.id, actor?.name);
   }
 }
 

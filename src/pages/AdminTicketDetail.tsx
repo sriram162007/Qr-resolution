@@ -12,7 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, MapPin, X, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, MapPin, X, Loader2, Sparkles, Copy, Check } from "lucide-react";
+import { getEstimateString } from "@/lib/resolutionEstimate";
 import type { Ticket, TicketStatus, TicketPriority, TicketSeverity, TicketActivity } from "@/types";
 
 const STATUSES: TicketStatus[] = ["OPEN", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED"];
@@ -47,6 +48,9 @@ export default function AdminTicketDetail() {
   const [assignedToName, setAssignedToName] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [resolutionSummary, setResolutionSummary] = useState("");
+  const [currentActivity, setCurrentActivity] = useState("");
+  const [estimatedResolutionMins, setEstimatedResolutionMins] = useState("");
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const [users, setUsers] = useState<Array<{ id: string; email: string | null }>>([]);
   const [activities, setActivities] = useState<TicketActivity[]>([]);
@@ -91,6 +95,8 @@ export default function AdminTicketDetail() {
           setAssignedToName(data.assignedToName || "");
           setResolutionNotes(data.resolutionNotes || "");
           setResolutionSummary(data.resolutionSummary || "");
+          setCurrentActivity(data.currentActivity || "");
+          setEstimatedResolutionMins(data.estimatedResolutionMins || "");
           const loc = await getLocation(data.locationId);
           if (loc) setLocationName(getLocationPath([loc], loc.id));
         }
@@ -152,6 +158,8 @@ export default function AdminTicketDetail() {
         assignedToName: assignedToName || undefined,
         resolutionNotes: resolutionNotes || undefined,
         resolutionSummary: resolutionSummary || undefined,
+        currentActivity: currentActivity || undefined,
+        estimatedResolutionMins: estimatedResolutionMins || undefined,
       }, actor);
       setSuccess("Ticket updated successfully");
       const data = await getTicket(ticketId);
@@ -164,10 +172,22 @@ export default function AdminTicketDetail() {
         setAssignedToName(data.assignedToName || "");
         setResolutionNotes(data.resolutionNotes || "");
         setResolutionSummary(data.resolutionSummary || "");
+        setCurrentActivity(data.currentActivity || "");
+        setEstimatedResolutionMins(data.estimatedResolutionMins || "");
         const newStatus = data.status;
         const changes = buildChangeList(oldTicket, data);
         const statusChanged = previousStatus !== newStatus;
         const normalizedPhone = normalizePhoneNumber(data.phoneNumber || "");
+        const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
+        const trackingUrl = data.trackingToken
+          ? `${appUrl}/track/${data.ticketId}/${data.trackingToken}`
+          : `${appUrl}/track/${data.ticketId}`;
+        const estimatedResolution = getEstimateString(
+          data.priority,
+          data.severity,
+          data.status,
+          data.estimatedResolutionMins,
+        );
         if ((statusChanged || changes.length > 0) && normalizedPhone) {
           const payload: Record<string, unknown> = {
             phoneNumber: normalizedPhone,
@@ -177,6 +197,10 @@ export default function AdminTicketDetail() {
             changes: changes.length > 0 ? changes : undefined,
             resolutionNotes: data.resolutionNotes,
             assignedToName: data.assignedToName,
+            estimatedResolution,
+            trackingUrl,
+            resolvedInMins: data.resolvedInMins,
+            currentActivity: data.currentActivity,
           };
           fetch("/api/send-whatsapp", {
             method: "POST",
@@ -185,10 +209,7 @@ export default function AdminTicketDetail() {
           }).then((response) => {
             if (!response.ok) {
               response.text().then((text) => {
-                console.error("[Ticket Update] WhatsApp API error", {
-                  status: response.status,
-                  body: text,
-                });
+                console.error("[Ticket Update] WhatsApp API error", { status: response.status, body: text });
               });
             }
           }).catch((whatsappError) => {
@@ -434,6 +455,29 @@ export default function AdminTicketDetail() {
               <CardTitle>Ticket Actions</CardTitle>
             </CardHeader>
             <CardContent>
+              {ticket.trackingToken && (
+                <div className="mb-4 rounded-md border bg-muted/30 p-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Customer Tracking Link</p>
+                  <div className="flex items-center gap-2">
+                    <code className="text-xs flex-1 truncate">
+                      {`${(import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")}/track/${ticket.ticketId}/${ticket.trackingToken}`}
+                    </code>
+                    <button
+                      type="button"
+                      className="shrink-0 p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Copy link"
+                      onClick={() => {
+                        const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
+                        navigator.clipboard.writeText(`${appUrl}/track/${ticket.ticketId}/${ticket.trackingToken}`);
+                        setCopySuccess(true);
+                        setTimeout(() => setCopySuccess(false), 2000);
+                      }}
+                    >
+                      {copySuccess ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )}
               <form onSubmit={handleSave} className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Status</label>
@@ -506,6 +550,33 @@ export default function AdminTicketDetail() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Current Activity
+                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">(shown to customer)</span>
+                  </label>
+                  <Textarea
+                    value={currentActivity}
+                    onChange={(e) => setCurrentActivity(e.target.value)}
+                    placeholder="e.g. Our team is diagnosing the reported issue."
+                    disabled={saving}
+                    rows={2}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Estimated Resolution
+                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">(range in mins, e.g. 20-30)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={estimatedResolutionMins}
+                    onChange={(e) => setEstimatedResolutionMins(e.target.value)}
+                    placeholder={ticket ? getEstimateString(ticket.priority, ticket.severity, (status || ticket.status)) : "20-30"}
+                    disabled={saving}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                  />
                 </div>
 
                 <div className="space-y-2">

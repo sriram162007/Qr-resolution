@@ -5,9 +5,10 @@ import { getOrganization } from "@/services/organizationService";
 import { getLocation, getChildLocations } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
 import { analyzeIssue } from "@/services/aiIssueService";
-import { createTicket, generateTicketId } from "@/services/ticketService";
+import { createTicket, generateTicketId, generateTrackingToken } from "@/services/ticketService";
 import { uploadTicketPhoto } from "@/services/supabaseService";
 import { normalizePhoneNumber } from "@/services/whatsappService";
+import { getEstimateString } from "@/lib/resolutionEstimate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import type { Location } from "@/types";
@@ -62,6 +63,7 @@ export default function PublicReport() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [ticketId, setTicketId] = useState<string | null>(null);
+  const [trackingToken, setTrackingToken] = useState<string | null>(null);
 
   const [description, setDescription] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -233,6 +235,7 @@ export default function PublicReport() {
     setUploadError(null);
     try {
       const newTicketId = generateTicketId();
+      const newTrackingToken = generateTrackingToken();
       let photoUrl: string | undefined;
       const normalizedPhone = normalizePhoneNumber(phoneNumber);
 
@@ -250,6 +253,13 @@ export default function PublicReport() {
         }
       }
 
+      const finalPriority: string = finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4";
+      const estimatedResolution = getEstimateString(
+        finalPriority as import("@/types").TicketPriority,
+        finalSeverity as import("@/types").TicketSeverity,
+        "OPEN",
+      );
+
       const ticketData: Record<string, unknown> = {
         qrId: qrId || "",
         organizationId: qr.organizationId,
@@ -258,10 +268,12 @@ export default function PublicReport() {
         title: finalTitle,
         description: description.trim(),
         severity: finalSeverity,
-        priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+        priority: finalPriority,
         status: "OPEN",
         aiSummary: finalSummary,
         aiConfidence: finalConfidence,
+        trackingToken: newTrackingToken,
+        estimatedResolutionMins: estimatedResolution.replace(" mins", ""),
       };
 
       if (finalArea) ticketData.reportedArea = finalArea;
@@ -270,6 +282,9 @@ export default function PublicReport() {
       if (normalizedPhone) ticketData.phoneNumber = normalizedPhone;
 
       await createTicket(ticketData as any, newTicketId);
+
+      const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
+      const trackingUrl = `${appUrl}/track/${newTicketId}/${newTrackingToken}`;
 
       if (normalizedPhone) {
         try {
@@ -281,22 +296,23 @@ export default function PublicReport() {
               ticketId: newTicketId,
               type: "created",
               title: finalTitle,
-              priority: finalSeverity === "CRITICAL" ? "P1" : finalSeverity === "HIGH" ? "P2" : finalSeverity === "MEDIUM" ? "P3" : "P4",
+              category: finalCategory,
+              priority: finalPriority,
               status: "OPEN",
+              estimatedResolution,
+              trackingUrl,
             }),
           });
           if (!response.ok) {
             const text = await response.text();
-            console.error("[Ticket Submit] WhatsApp API error", {
-              status: response.status,
-              body: text,
-            });
+            console.error("[Ticket Submit] WhatsApp API error", { status: response.status, body: text });
           }
         } catch (whatsappError) {
           console.error("[Ticket Submit] WhatsApp notification failed", whatsappError);
         }
       }
 
+      setTrackingToken(newTrackingToken);
       setTicketId(newTicketId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -345,6 +361,10 @@ export default function PublicReport() {
   }
 
   if (ticketId) {
+    const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
+    const trackingUrl = trackingToken
+      ? `${appUrl}/track/${ticketId}/${trackingToken}`
+      : `${appUrl}/track/${ticketId}`;
     return (
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-3.5rem)] px-4 py-8">
         <div className="w-full max-w-sm space-y-6">
@@ -352,18 +372,27 @@ export default function PublicReport() {
             <h1 className="text-xl font-bold tracking-tight">QR Resolution</h1>
           </div>
           <Card>
-            <CardHeader className="text-center">
-              <CardTitle className="text-2xl">Issue Reported Successfully</CardTitle>
+            <CardHeader className="text-center pb-2">
+              <div className="text-4xl mb-2">✅</div>
+              <CardTitle className="text-xl">Issue Reported!</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                Your issue has been reported with ticket ID:
+                Your complaint has been registered with ticket ID:
               </p>
-              <p className="text-center font-mono text-lg font-semibold">{ticketId}</p>
-              <Button className="w-full" size="lg" onClick={() => navigate(`/track/${ticketId}`)}>
-                Track Your Issue
+              <p className="text-center font-mono text-lg font-semibold tracking-wider">{ticketId}</p>
+              <div className="rounded-md bg-muted/50 p-3 text-xs text-center text-muted-foreground space-y-1">
+                <p>You can track the status of your complaint anytime using the button below.</p>
+                {phoneNumber && <p>A WhatsApp confirmation will be sent shortly.</p>}
+              </div>
+              <Button
+                className="w-full"
+                size="lg"
+                onClick={() => window.location.href = trackingUrl}
+              >
+                🔗 Track My Complaint
               </Button>
-              <Button variant="outline" className="w-full" onClick={() => navigate("/")}>
+              <Button variant="outline" className="w-full" onClick={() => window.location.href = "/"}>
                 Go Home
               </Button>
             </CardContent>

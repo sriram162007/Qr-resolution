@@ -67,7 +67,10 @@ export default function App() {
       />
       <Route path="/q/:qrId" element={<PublicQR />} />
       <Route path="/report/:qrId" element={<PublicReport />} />
+      {/* /track/:ticketId — backward compat (no token) */}
       <Route path="/track/:ticketId" element={<PublicTrack />} />
+      {/* /track/:ticketId/:token — new secure tracking links sent via WhatsApp */}
+      <Route path="/track/:ticketId/:token" element={<PublicTrack />} />
     </Routes>
   );
 }
