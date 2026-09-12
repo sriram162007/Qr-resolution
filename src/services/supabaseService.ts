@@ -16,6 +16,12 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; erro
 }
 
 export async function uploadTicketPhoto(file: File, ticketId: string): Promise<string> {
+  if (!supabase) {
+    throw new Error(
+      "Supabase is not initialised. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables.",
+    );
+  }
+
   const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
   if (!allowedTypes.has(file.type)) {
     throw new Error("Invalid file type. Only JPG, PNG, and WEBP are allowed.");
@@ -33,12 +39,13 @@ export async function uploadTicketPhoto(file: File, ticketId: string): Promise<s
   });
 
   if (error) {
+    console.error("[Storage] Supabase upload error", { ticketId, message: error.message });
     throw new Error(error.message || "Upload failed");
   }
 
   const { data: publicData } = supabase.storage.from(BUCKET).getPublicUrl(filename);
   if (!publicData?.publicUrl) {
-    throw new Error("Failed to get public URL");
+    throw new Error("Failed to get public URL after upload");
   }
 
   return publicData.publicUrl;

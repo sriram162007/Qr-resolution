@@ -67,6 +67,7 @@ export default function PublicReport() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [aiLoading, setAiLoading] = useState(false);
@@ -229,6 +230,7 @@ export default function PublicReport() {
     }
 
     setSubmitting(true);
+    setUploadError(null);
     try {
       const newTicketId = generateTicketId();
       let photoUrl: string | undefined;
@@ -237,9 +239,12 @@ export default function PublicReport() {
       if (photoFile) {
         try {
           photoUrl = await uploadTicketPhoto(photoFile, newTicketId);
-        } catch (uploadError) {
-          console.error("[Ticket Submit] photo upload failed", uploadError);
-          setAiError("Photo upload failed. Please try again or submit without the photo.");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown upload error";
+          console.error("[Ticket Submit] photo upload failed", { message: msg });
+          setUploadError(
+            "Photo upload failed — " + msg + ". You can remove the photo and submit without it, or try again.",
+          );
           setSubmitting(false);
           return;
         }
@@ -417,11 +422,23 @@ export default function PublicReport() {
                   ref={fileInputRef}
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  onChange={handleFileChange}
+                  onChange={(e) => { setUploadError(null); handleFileChange(e); }}
                   className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
                 {photoError && (
                   <p className="text-xs text-destructive">{photoError}</p>
+                )}
+                {uploadError && (
+                  <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive space-y-1">
+                    <p>{uploadError}</p>
+                    <button
+                      type="button"
+                      className="underline font-medium"
+                      onClick={() => { removePhoto(); setUploadError(null); }}
+                    >
+                      Remove photo and continue without it
+                    </button>
+                  </div>
                 )}
                 {photoFile && photoPreview && (
                   <div className="space-y-2 rounded-md border bg-muted/30 p-3">
@@ -468,7 +485,14 @@ export default function PublicReport() {
                   className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Add your WhatsApp number if you want ticket updates.
+                  Enter your WhatsApp number (with country code, e.g.&nbsp;+91XXXXXXXXXX) to receive status updates.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  ⚠️ First-time users: you must first send the message{" "}
+                  <span className="font-mono font-semibold">join plenty-gave</span>{" "}
+                  to{" "}
+                  <span className="font-mono font-semibold">+1 415 523 8886</span>{" "}
+                  on WhatsApp to activate notifications.
                 </p>
                 {phoneError && (
                   <p className="text-xs text-destructive">{phoneError}</p>

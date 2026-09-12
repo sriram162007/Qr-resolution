@@ -173,21 +173,44 @@ export default async function handler(req: any, res: any) {
       body: messageBody,
     });
 
-    console.log("[WhatsApp API] Message sent", {
-      ticketId: body.ticketId,
-      type: body.type,
-      recipient: maskedRecipient,
-      messageSid: result.sid,
-      status: result.status,
-    });
+    // Twilio may return success=true but still include an error on the message
+    // object (e.g. sandbox recipient not opted-in → errorCode 63032).
+    if (result.errorCode) {
+      console.warn("[WhatsApp API] Message accepted but has error code", {
+        ticketId: body.ticketId,
+        type: body.type,
+        recipient: maskedRecipient,
+        messageSid: result.sid,
+        status: result.status,
+        errorCode: result.errorCode,
+        errorMessage: result.errorMessage,
+      });
+    } else {
+      console.log("[WhatsApp API] Message sent", {
+        ticketId: body.ticketId,
+        type: body.type,
+        recipient: maskedRecipient,
+        messageSid: result.sid,
+        status: result.status,
+      });
+    }
 
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ success: true, messageSid: result.sid }));
+    res.end(
+      JSON.stringify({
+        success: true,
+        messageSid: result.sid,
+        ...(result.errorCode
+          ? { warning: `Twilio errorCode ${result.errorCode}: ${result.errorMessage}` }
+          : {}),
+      }),
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     const errorCode = (err as any)?.code;
     const errorStatus = (err as any)?.status;
+    const twilioMoreInfo = (err as any)?.moreInfo;
     console.error("[WhatsApp API] Twilio error", {
       ticketId: body.ticketId,
       type: body.type,
@@ -195,9 +218,10 @@ export default async function handler(req: any, res: any) {
       errorCode,
       errorStatus,
       message,
+      twilioMoreInfo,
     });
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ message: "WhatsApp notification failed." }));
+    res.end(JSON.stringify({ message: "WhatsApp notification failed.", errorCode }));
   }
 }
