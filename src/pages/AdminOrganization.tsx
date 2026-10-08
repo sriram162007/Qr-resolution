@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { getOrganization, createOrganization, updateOrganization, setOrganizationActive } from "@/services/organizationService";
+import { getOrganization, createOrganization, updateOrganization } from "@/services/organizationService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Card } from "@/components/ui/card";
+import AdminNavbar from "@/components/AdminNavbar";
 import type { Organization } from "@/types";
 import { auth } from "@/lib/firebase";
+import {
+  Building2,
+  Save,
+  Loader2,
+} from "lucide-react";
 
 export default function AdminOrganizationPage() {
   const { user, authLoading } = useAuth();
@@ -15,7 +22,6 @@ export default function AdminOrganizationPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [errorDetails, setErrorDetails] = useState<{ code?: string; message?: string; name?: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -47,7 +53,7 @@ export default function AdminOrganizationPage() {
           setIsActive(org.isActive);
         }
       } catch {
-        setError("Failed to load organization.");
+        setError("Failed to load organization settings.");
       } finally {
         setLoading(false);
       }
@@ -62,7 +68,7 @@ export default function AdminOrganizationPage() {
     setSuccess(null);
     try {
       if (!auth.currentUser) {
-        throw new Error("No authenticated user. Please log in again.");
+        throw new Error("No authenticated session found.");
       }
       if (organization) {
         await updateOrganization(organization.id, {
@@ -73,13 +79,8 @@ export default function AdminOrganizationPage() {
           logoUrl: logoUrl || undefined,
           isActive,
         });
-        setSuccess("Organization updated successfully.");
+        setSuccess("Campus settings updated successfully.");
       } else {
-        console.log("[Organization Create] before write", {
-          uid: auth.currentUser.uid,
-          email: auth.currentUser.email,
-          path: "organizations/default"
-        });
         const id = await createOrganization({
           name,
           description: description || undefined,
@@ -88,8 +89,7 @@ export default function AdminOrganizationPage() {
           logoUrl: logoUrl || undefined,
           isActive,
         });
-        console.log("[Organization Create] after write", { id });
-        setSuccess("Organization created successfully.");
+        setSuccess("Campus organization created successfully.");
         setOrganization({
           id,
           name,
@@ -101,181 +101,133 @@ export default function AdminOrganizationPage() {
           createdAt: new Date(),
           updatedAt: new Date(),
         });
-        setName(name);
-        setDescription(description || "");
-        setContactEmail(contactEmail || "");
-        setContactPhone(contactPhone || "");
-        setLogoUrl(logoUrl || "");
-        setIsActive(isActive);
       }
     } catch (err) {
-      console.error("[Organization Create]", {
-        code: (err as { code?: string })?.code,
-        message: (err as { message?: string })?.message,
-        name: (err as { name?: string })?.name,
-      });
-      setError("Failed to save organization.");
-      setErrorDetails({
-        code: (err as { code?: string })?.code,
-        message: (err as { message?: string })?.message,
-        name: (err as { name?: string })?.name,
-      });
+      setError(err instanceof Error ? err.message : "Failed to update settings.");
     } finally {
       setSaving(false);
     }
   };
-
-  const handleToggleActive = async () => {
-    if (!organization) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await setOrganizationActive(organization.id, !organization.isActive);
-      setIsActive(!organization.isActive);
-      setSuccess(`Organization ${!organization.isActive ? "activated" : "deactivated"} successfully.`);
-    } catch {
-      setError("Failed to update organization status.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (authLoading || !user) {
-    return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)]">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Organization</h1>
-          <p className="text-muted-foreground">Manage your organization details.</p>
-        </div>
-      </div>
+    <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col selection:bg-[#0071E3]/15 selection:text-[#0071E3]">
+      <AdminNavbar />
 
-      <Card className="mt-8">
-        <CardHeader>
-          <CardTitle>{organization ? "Edit Organization" : "Create Organization"}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && (
-            <div className="space-y-2">
-              <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-                {error}
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[#1D1D1F]">
+            Campus Settings & Profile
+          </h1>
+          <p className="text-xs text-[#86868B] mt-0.5">
+            Configure institutional identity, contact channels, and facility management defaults.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded-2xl border border-[#FF3B30]/20 bg-[#FEECEC] p-4 text-xs text-[#D70015]">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="rounded-2xl border border-[#34C759]/20 bg-[#EAF8EE] p-4 text-xs text-[#1B873F]">
+            {success}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Card>
+            <div className="p-6 space-y-5">
+              <div className="flex items-center gap-2 pb-3 border-b border-black/[0.06]">
+                <Building2 className="w-4 h-4 text-[#0071E3]" />
+                <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                  Institution Details
+                </h2>
               </div>
-              {errorDetails && (
-                <div className="rounded-md border border-destructive/50 bg-destructive/5 p-3 text-xs text-destructive font-mono">
-                  <div>Firebase error code: {errorDetails.code}</div>
-                  <div>Firebase error message: {errorDetails.message}</div>
-                  <div>Firebase error name: {errorDetails.name}</div>
-                </div>
-              )}
-            </div>
-          )}
-          {success && (
-            <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700 mb-4">
-              {success}
-            </div>
-          )}
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <label htmlFor="name" className="text-sm font-medium">
-                  Organization Name <span className="text-destructive">*</span>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                  University / College Name *
                 </label>
                 <Input
-                  id="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. National Institute of Technology"
                   required
-                  disabled={saving}
-                  placeholder="ABC College"
+                  className="h-11"
                 />
               </div>
-              <div className="space-y-2">
-                <label htmlFor="description" className="text-sm font-medium">
-                  Description
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                  Campus Description & Scope
                 </label>
-                <Input
-                  id="description"
+                <Textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  disabled={saving}
-                  placeholder="Brief description"
+                  placeholder="e.g. Main Campus Facility Operations & Residential Quarters"
+                  className="min-h-[80px]"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label htmlFor="contactEmail" className="text-sm font-medium">
-                    Contact Email
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                    Helpdesk Support Email
                   </label>
                   <Input
-                    id="contactEmail"
                     type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
-                    disabled={saving}
-                    placeholder="admin@example.com"
+                    placeholder="maintenance@campus.edu"
+                    className="h-11"
                   />
                 </div>
-                <div className="space-y-2">
-                  <label htmlFor="contactPhone" className="text-sm font-medium">
-                    Contact Phone
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                    Emergency Helpdesk Phone
                   </label>
                   <Input
-                    id="contactPhone"
+                    type="tel"
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
-                    disabled={saving}
-                    placeholder="+1 234 567 890"
+                    placeholder="+91 98765 43210"
+                    className="h-11"
                   />
                 </div>
               </div>
-              <div className="space-y-2">
-                <label htmlFor="logoUrl" className="text-sm font-medium">
-                  Logo URL
-                </label>
-                <Input
-                  id="logoUrl"
-                  value={logoUrl}
-                  onChange={(e) => setLogoUrl(e.target.value)}
-                  disabled={saving}
-                  placeholder="https://example.com/logo.png"
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  type="checkbox"
+                  id="orgActive"
+                  checked={isActive}
+                  onChange={(e) => setIsActive(e.target.checked)}
+                  className="rounded text-[#0071E3] focus:ring-[#0071E3]"
                 />
+                <label htmlFor="orgActive" className="text-xs text-[#1D1D1F] font-medium">
+                  Campus facility reporting active and accepting public tickets
+                </label>
               </div>
-              {organization && (
-                <div className="flex items-center justify-between rounded-md border p-4">
-                  <div>
-                    <p className="text-sm font-medium">Status</p>
-                    <p className="text-xs text-muted-foreground">
-                      {isActive ? "Organization is active" : "Organization is inactive"}
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" onClick={handleToggleActive} disabled={saving}>
-                    {isActive ? "Deactivate" : "Activate"}
-                  </Button>
-                </div>
-              )}
-              <div className="flex gap-2">
-                <Button type="submit" disabled={saving}>
-                  {saving ? "Saving..." : organization ? "Save Changes" : "Create Organization"}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => navigate("/admin")}>
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          )}
-        </CardContent>
-      </Card>
+            </div>
+          </Card>
+
+          <div className="flex justify-end">
+            <Button
+              type="submit"
+              disabled={saving || loading || !name.trim()}
+              className="h-11 px-6 text-xs font-semibold rounded-xl shadow-[0_1px_3px_rgba(0,113,227,0.3)] flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {loading ? "Loading..." : saving ? "Saving Changes..." : "Save Institutional Settings"}
+            </Button>
+          </div>
+        </form>
+      </main>
+
+      <footer className="text-center text-xs text-[#86868B] py-6 border-t border-black/[0.06] bg-white">
+        Campus Pulse • Institutional Settings & Configuration
+      </footer>
     </div>
   );
 }

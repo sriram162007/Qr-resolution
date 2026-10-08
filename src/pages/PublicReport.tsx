@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { getQRCode } from "@/services/qrService";
 import { getOrganization } from "@/services/organizationService";
 import { getLocation, getChildLocations } from "@/services/locationService";
@@ -11,23 +11,42 @@ import { normalizePhoneNumber } from "@/services/whatsappService";
 import { detectAnomalies } from "@/services/anomalyService";
 import { getEstimateString } from "@/lib/resolutionEstimate";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 import type { Location, AnomalyFlag } from "@/types";
+import {
+  MapPin,
+  Building2,
+  Camera,
+  X,
+  Loader2,
+  Sparkles,
+  CheckCircle2,
+  Copy,
+  Check,
+  ArrowRight,
+  ArrowLeft,
+  AlertTriangle,
+  Info,
+  MessageSquare,
+  SlidersHorizontal,
+} from "lucide-react";
 
 const CATEGORIES = [
-  { value: "Electrical", label: "⚡ Electrical" },
-  { value: "Plumbing", label: "🪠 Plumbing / Water" },
-  { value: "Cleaning", label: "🧹 Cleaning" },
-  { value: "Civil", label: "🏗️ Civil / Infrastructure" },
-  { value: "Hostel", label: "🏠 Hostel" },
-  { value: "Laboratory", label: "🔬 Laboratory" },
-  { value: "Other", label: "❓ Other" },
+  { value: "Electrical", label: "Electrical / Power" },
+  { value: "Plumbing", label: "Plumbing & Water" },
+  { value: "Cleaning", label: "Cleaning & Sanitation" },
+  { value: "Civil", label: "Civil & Infrastructure" },
+  { value: "Hostel", label: "Hostel & Residential" },
+  { value: "Laboratory", label: "Laboratory & Equipment" },
+  { value: "Other", label: "General Maintenance" },
 ] as const;
 
 type Category = (typeof CATEGORIES)[number]["value"];
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
-// Transparent priority rules as defined in the research design
 const PRIORITY_RULES = {
   HIGH: [
     "exposed wiring",
@@ -87,7 +106,6 @@ function validatePhoneNumber(value: string): string | null {
   if (!trimmed) return null;
   const digits = trimmed.replace(/[\s-]/g, "");
 
-  // Indian number validation
   if (digits.startsWith("+91") || (digits.startsWith("91") && digits.length === 12)) {
     const mobile = digits.replace(/^\+?91/, "");
     if (!/^[6-9]\d{9}$/.test(mobile)) {
@@ -104,10 +122,6 @@ function validatePhoneNumber(value: string): string | null {
   return null;
 }
 
-/**
- * Apply transparent priority rules from the research design.
- * Returns null if no rule matches (defer to AI).
- */
 function applyPriorityRules(description: string): { severity: Severity; priority: "P1" | "P2" | "P3" | "P4" } | null {
   const lower = description.toLowerCase();
   if (PRIORITY_RULES.HIGH.some((kw) => lower.includes(kw))) {
@@ -148,16 +162,17 @@ export default function PublicReport() {
   const [lowConfidenceWarning, setLowConfidenceWarning] = useState(false);
 
   const [manualCategory, setManualCategory] = useState<Category>("Other");
-  const [manualArea, setManualArea] = useState<string>("");
+  const [manualArea, setManualArea] = useState("");
   const [manualSeverity, setManualSeverity] = useState<Severity>("MEDIUM");
+
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [copiedToken, setCopiedToken] = useState(false);
 
   // Duplicate detection state
   const [duplicateCheckLoading, setDuplicateCheckLoading] = useState(false);
   const [duplicateResult, setDuplicateResult] = useState<{ isDuplicate: boolean; parentTicketId?: string; matches?: DuplicateMatch[] } | null>(null);
   const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
-
 
   useEffect(() => {
     return () => {
@@ -179,8 +194,9 @@ export default function PublicReport() {
           name: data.name,
           locationId: data.locationId,
           organizationId: data.organizationId,
-          department: (data as any).department,
+          department: data.department,
         });
+
         const [org, loc, children] = await Promise.all([
           getOrganization(data.organizationId),
           getLocation(data.locationId),
@@ -211,7 +227,7 @@ export default function PublicReport() {
     }
 
     if (!ALLOWED_TYPES.has(file.type)) {
-      setPhotoError("Invalid file type. Please select a JPG, PNG, or WEBP image.");
+      setPhotoError("Please select a JPG, PNG, or WEBP image.");
       setPhotoFile(null);
       setPhotoPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -219,7 +235,7 @@ export default function PublicReport() {
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      setPhotoError("File is too large. Maximum size is 5 MB.");
+      setPhotoError("Image exceeds 5 MB. Please select a smaller photo.");
       setPhotoFile(null);
       setPhotoPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -246,7 +262,7 @@ export default function PublicReport() {
       const reader = new FileReader();
       reader.onload = () => {
         const result = typeof reader.result === "string" ? reader.result : "";
-        const base64 = result.split(",")[1] || "";
+        const base64 = result.includes(",") ? result.split(",")[1] : result;
         resolve(base64);
       };
       reader.onerror = () => reject(new Error("Failed to read image file"));
@@ -271,10 +287,8 @@ export default function PublicReport() {
         image: imagePayload,
       });
 
-      // Apply transparent priority rules — override AI if rule-based priority is higher
       const rulePriority = applyPriorityRules(description);
       if (rulePriority) {
-        // Only escalate, never downgrade based on rules
         const priorityOrder = { P1: 0, P2: 1, P3: 2, P4: 3 };
         const rulePriorityNum = priorityOrder[rulePriority.priority];
         const aiPriorityNum = priorityOrder[result.priority];
@@ -286,7 +300,6 @@ export default function PublicReport() {
 
       setAiResult(result);
 
-      // Flag low confidence for admin review
       if (result.confidence < AI_CONFIDENCE_THRESHOLD) {
         setLowConfidenceWarning(true);
       } else {
@@ -294,13 +307,13 @@ export default function PublicReport() {
         setUseManual(false);
       }
     } catch {
-      setAiError("AI analysis is temporarily unavailable. Please fill in the details manually.");
+      setAiError("AI analysis service is momentarily busy. You can review details manually.");
       setUseManual(true);
     } finally {
       setAiLoading(false);
     }
 
-    // Run duplicate check in parallel (non-blocking)
+    // Run duplicate check in background
     if (qr && description.trim()) {
       setDuplicateCheckLoading(true);
       try {
@@ -318,8 +331,7 @@ export default function PublicReport() {
           setDuplicateResult(data);
         }
       } catch {
-        // Duplicate check failure is non-critical
-        console.warn("[Duplicate Check] Failed");
+        console.warn("[Duplicate Check] Non-fatal check error");
       } finally {
         setDuplicateCheckLoading(false);
       }
@@ -370,17 +382,13 @@ export default function PublicReport() {
         try {
           photoUrl = await uploadTicketPhoto(photoFile, newTicketId);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : "Unknown upload error";
-          console.error("[Ticket Submit] photo upload failed", { message: msg });
-          setUploadError(
-            "Photo upload failed — " + msg + ". You can remove the photo and submit without it, or try again.",
-          );
+          const msg = err instanceof Error ? err.message : "Upload error";
+          setUploadError(`Photo upload failed: ${msg}. You may submit without a photo or try again.`);
           setSubmitting(false);
           return;
         }
       }
 
-      // Run anomaly detection (advisory — never blocks)
       let detectedFlags: AnomalyFlag[] = [];
       try {
         const anomalyResult = await detectAnomalies({
@@ -391,7 +399,7 @@ export default function PublicReport() {
         });
         detectedFlags = anomalyResult.flags;
       } catch {
-        // Anomaly detection failure never blocks submission
+        // Advisory anomaly check never blocks genuine submission
       }
 
       const finalPriority: string =
@@ -405,13 +413,12 @@ export default function PublicReport() {
         "OPEN",
       );
 
-      // Determine routing
       const routingDecision = finalConfidence >= AI_CONFIDENCE_THRESHOLD && qr.department
         ? "AUTO"
         : "MANUAL_REVIEW";
       const routingReason = routingDecision === "AUTO"
-        ? `Auto-routed: AI confidence ${Math.round(finalConfidence * 100)}% ≥ threshold (60%), department matched`
-        : `Manual review required: AI confidence ${Math.round(finalConfidence * 100)}% < threshold (60%) or no department mapping`;
+        ? `Auto-routed: AI confidence ${Math.round(finalConfidence * 100)}% ≥ 60%, department mapped`
+        : `Manual review: AI confidence ${Math.round(finalConfidence * 100)}% or department pending`;
 
       const ticketData: Record<string, unknown> = {
         qrId: qrId || "",
@@ -440,7 +447,6 @@ export default function PublicReport() {
       if (qr.department) ticketData.department = qr.department;
       if (detectedFlags.length > 0) ticketData.anomalyFlags = detectedFlags;
 
-      // Check for duplicate — link instead of blocking
       if (duplicateResult?.isDuplicate && duplicateResult.parentTicketId && duplicateAcknowledged) {
         ticketData.isDuplicate = true;
         ticketData.parentTicketId = duplicateResult.parentTicketId;
@@ -449,21 +455,22 @@ export default function PublicReport() {
 
       await createTicket(ticketData as any, newTicketId);
 
-      // Link to parent ticket if duplicate
       if (duplicateResult?.isDuplicate && duplicateResult.parentTicketId && duplicateAcknowledged) {
         try {
           await linkDuplicateTicket(newTicketId, duplicateResult.parentTicketId, duplicateResult.matches?.[0]?.similarity ?? 0);
         } catch (e) {
-          console.warn("[Duplicate Link] Failed:", e);
+          console.warn("[Duplicate Link] Note:", e);
         }
       }
 
-      const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
-      const trackingUrl = `${appUrl}/track/${newTicketId}/${newTrackingToken}`;
+      setTicketId(newTicketId);
+      setTrackingToken(newTrackingToken);
 
       if (normalizedPhone) {
+        const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
+        const trackingUrl = `${appUrl}/track/${newTicketId}/${newTrackingToken}`;
         try {
-          const response = await fetch("/api/send-whatsapp", {
+          await fetch("/api/send-whatsapp", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -473,382 +480,612 @@ export default function PublicReport() {
               title: finalTitle,
               category: finalCategory,
               priority: finalPriority,
-              status: "OPEN",
               estimatedResolution,
               trackingUrl,
             }),
           });
-          if (!response.ok) {
-            const text = await response.text();
-            console.error("[Ticket Submit] WhatsApp API error", { status: response.status, body: text });
-          } else {
-            const json = await response.json();
-            console.log("[Ticket Submit] WhatsApp sent", { messageSid: json.messageSid, warning: json.warning });
-          }
-        } catch (whatsappError) {
-          console.error("[Ticket Submit] WhatsApp notification failed", whatsappError);
+        } catch {
+          // WhatsApp delivery non-blocking
         }
       }
-
-      setTrackingToken(newTrackingToken);
-      setTicketId(newTicketId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[Ticket Submit] create failed", {
-        message,
-        code: (err as { code?: string })?.code,
-        name: (err as { name?: string })?.name,
-      });
       setAiError(`Failed to create ticket: ${message}`);
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleCopyTicket = () => {
+    if (!ticketId) return;
+    navigator.clipboard.writeText(ticketId);
+    setCopiedToken(true);
+    setTimeout(() => setCopiedToken(false), 2000);
+  };
+
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+      <div className="min-h-screen bg-[#FBFBFD] flex flex-col items-center justify-center p-4">
+        <div className="w-12 h-12 rounded-2xl bg-white border border-black/10 shadow-xs flex items-center justify-center">
+          <Loader2 className="w-6 h-6 animate-spin text-[#0071E3]" />
+        </div>
+        <p className="text-xs text-[#86868B] mt-3 font-medium">Loading facility details...</p>
       </div>
     );
   }
 
   if (!qr) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-        <div className="w-full max-w-sm space-y-6">
-          <Card className="bg-slate-900 border-slate-700">
-            <CardHeader className="text-center">
-              <div className="text-5xl mb-2">❌</div>
-              <CardTitle className="text-xl text-white">QR Code Not Found</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-slate-400 text-center">
-                This QR code is invalid or inactive. Please scan a valid campus QR code.
-              </p>
-              <Button className="w-full mt-4" variant="outline" onClick={() => navigate("/")}>
-                Go Home
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col items-center justify-center p-4">
+        <Card className="max-w-md w-full border border-black/[0.08] shadow-[0_4px_24px_rgba(0,0,0,0.04)] rounded-3xl p-8 text-center space-y-4 bg-white">
+          <div className="w-14 h-14 rounded-2xl bg-[#FF3B30]/10 border border-[#FF3B30]/20 mx-auto flex items-center justify-center text-[#FF3B30]">
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Facility Tag Not Found</h1>
+            <p className="text-sm text-[#6E6E73]">
+              The facility code could not be verified in the campus database.
+            </p>
+          </div>
+          <Button asChild variant="outline" className="w-full">
+            <Link to="/">Return to Campus Home</Link>
+          </Button>
+        </Card>
       </div>
     );
   }
 
+  // ─── TICKET CREATED SUCCESS VIEW (iOS Pass Style) ───
   if (ticketId) {
-    const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
-    const trackingUrl = trackingToken
-      ? `${appUrl}/track/${ticketId}/${trackingToken}`
-      : `${appUrl}/track/${ticketId}`;
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-        <div className="w-full max-w-sm space-y-6">
-          <Card className="bg-slate-900 border-slate-700">
-            <CardHeader className="text-center pb-2">
-              <div className="text-5xl mb-2">✅</div>
-              <CardTitle className="text-xl text-white">Complaint Registered!</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-slate-400 text-center">
-                Your complaint has been registered with ticket ID:
-              </p>
-              <p className="text-center font-mono text-lg font-semibold tracking-wider text-blue-400">{ticketId}</p>
-              <div className="rounded-md bg-slate-800 p-3 text-xs text-center text-slate-400 space-y-1">
-                <p>Track your complaint anytime using the button below.</p>
-                {phoneNumber && <p>A WhatsApp confirmation has been sent to your number.</p>}
-                {duplicateResult?.isDuplicate && duplicateAcknowledged && (
-                  <p className="text-yellow-400">⚠️ This was reported as a duplicate and linked to an existing ticket.</p>
-                )}
+      <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col justify-between p-4 sm:p-6 selection:bg-[#0071E3]/15 selection:text-[#0071E3]">
+        <div className="max-w-md w-full mx-auto pt-4 pb-12">
+          {/* iOS Success Card */}
+          <Card className="border border-black/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.05)] rounded-3xl overflow-hidden bg-white">
+            <div className="p-8 text-center space-y-6">
+              <div className="w-16 h-16 rounded-full bg-[#EAF8EE] border border-[#C3ECD1] mx-auto flex items-center justify-center text-[#1B873F] shadow-xs">
+                <CheckCircle2 className="w-9 h-9" />
               </div>
-              <Button
-                className="w-full bg-blue-600 hover:bg-blue-700"
-                size="lg"
-                onClick={() => window.location.href = trackingUrl}
-              >
-                🔗 Track My Complaint
-              </Button>
-              <Button variant="outline" className="w-full border-slate-600 text-slate-300" onClick={() => window.location.href = "/"}>
-                Go Home
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-      <div className="w-full max-w-sm space-y-4">
-        {/* Header */}
-        <div className="text-center">
-          <h1 className="text-xl font-bold tracking-tight text-white">🏛️ Campus Complaint System</h1>
-          <p className="text-xs text-slate-400 mt-1">AI-Powered Issue Reporting</p>
-        </div>
-
-        <Card className="bg-slate-900 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white text-lg">Report an Issue</CardTitle>
-            <CardDescription className="space-y-1 text-slate-400">
-              {organizationName && <p><span className="font-medium text-slate-300">Institute:</span> {organizationName}</p>}
-              {locationName && <p><span className="font-medium text-slate-300">Location:</span> {locationName}</p>}
-              {qr.department && <p><span className="font-medium text-slate-300">Department:</span> {qr.department}</p>}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Description */}
-              <div className="space-y-2">
-                <label htmlFor="description" className="text-sm font-medium text-slate-200">
-                  Describe the issue <span className="text-red-400">*</span>
-                </label>
-                <textarea
-                  id="description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  required
-                  minLength={10}
-                  maxLength={2000}
-                  rows={4}
-                  placeholder="Describe the problem clearly. Be specific about the exact location and nature of the issue..."
-                  className="flex w-full rounded-md border border-slate-600 bg-slate-800 text-slate-100 px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 placeholder:text-slate-500"
-                />
-                <p className="text-xs text-slate-500">{description.length}/2000 characters</p>
-                <p className="text-xs text-slate-400">
-                  💡 Examples: "Exposed wiring in Lab 3", "Leaking tap in boys' hostel bathroom", "AC not working in Room 204"
+              <div className="space-y-1.5">
+                <Badge variant="success" className="px-3 py-1 text-xs">
+                  Complaint Registered
+                </Badge>
+                <h1 className="text-2xl font-bold tracking-tight text-[#1D1D1F] pt-1">
+                  Ticket Generated
+                </h1>
+                <p className="text-sm text-[#6E6E73]">
+                  Your report has been dispatched to the campus facility operations team.
                 </p>
               </div>
 
-              {/* Photo upload */}
-              <div className="space-y-2">
-                <label htmlFor="photo" className="text-sm font-medium text-slate-200">
-                  Add a photo <span className="text-slate-500">(optional, max 5 MB)</span>
-                </label>
-                <input
-                  id="photo"
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(e) => { setUploadError(null); handleFileChange(e); }}
-                  className="flex w-full rounded-md border border-slate-600 bg-slate-800 text-slate-300 px-3 py-2 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium"
-                />
-                {photoError && <p className="text-xs text-red-400">{photoError}</p>}
-                {uploadError && (
-                  <div className="rounded-md border border-red-500/50 bg-red-900/20 p-3 text-xs text-red-400 space-y-1">
-                    <p>{uploadError}</p>
-                    <button type="button" className="underline font-medium" onClick={() => { removePhoto(); setUploadError(null); }}>
-                      Remove photo and continue without it
-                    </button>
+              {/* Ticket Pass Pill */}
+              <div className="bg-[#F5F5F7] border border-black/[0.06] rounded-2xl p-4 flex items-center justify-between">
+                <div className="text-left">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[#86868B]">
+                    Ticket Reference
                   </div>
-                )}
-                {photoFile && photoPreview && (
-                  <div className="space-y-2 rounded-md border border-slate-600 bg-slate-800/50 p-3">
-                    <img src={photoPreview} alt="Preview" className="w-full h-40 object-cover rounded-md" />
-                    <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span className="truncate">{photoFile.name}</span>
-                      <span>{formatFileSize(photoFile.size)}</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button type="button" variant="outline" size="sm" className="flex-1 border-slate-600 text-slate-300" onClick={removePhoto}>Remove</Button>
-                      <Button type="button" variant="ghost" size="sm" className="flex-1 text-slate-300" onClick={() => fileInputRef.current?.click()}>Change</Button>
-                    </div>
+                  <div className="font-mono text-lg font-bold text-[#1D1D1F]">
+                    {ticketId}
                   </div>
-                )}
-              </div>
-
-              {/* WhatsApp */}
-              <div className="space-y-2">
-                <label htmlFor="phone" className="text-sm font-medium text-slate-200">
-                  WhatsApp Number <span className="text-slate-500">(optional)</span>
-                </label>
-                <input
-                  id="phone"
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => {
-                    setPhoneNumber(e.target.value);
-                    if (phoneError) setPhoneError(null);
-                  }}
-                  placeholder="+91XXXXXXXXXX"
-                  className="flex w-full rounded-md border border-slate-600 bg-slate-800 text-slate-100 px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 placeholder:text-slate-500"
-                />
-                <div className="space-y-1 text-xs text-slate-500">
-                  <p>Enter your WhatsApp number (with country code, e.g. +91XXXXXXXXXX) to receive ticket updates.</p>
-                  <p>⚠️ First-time users must send <span className="font-mono font-semibold text-slate-400">join plenty-gave</span> to <span className="font-mono font-semibold text-slate-400">+1 415 523 8886</span> on WhatsApp to activate notifications.</p>
                 </div>
-                {phoneError && <p className="text-xs text-red-400">{phoneError}</p>}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyTicket}
+                  className="h-9 px-3 text-xs rounded-xl flex items-center gap-1.5 border-black/10 bg-white"
+                >
+                  {copiedToken ? <Check className="w-3.5 h-3.5 text-[#1B873F]" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedToken ? "Copied" : "Copy"}
+                </Button>
               </div>
 
-              {/* Analyze button */}
-              {!aiResult && !useManual && (
+              {/* Status details */}
+              <div className="text-xs text-[#6E6E73] bg-[#FBFBFD] border border-black/[0.04] rounded-xl p-3.5 text-left space-y-2">
+                <div className="flex items-center gap-2 text-[#1D1D1F] font-medium">
+                  <MapPin className="w-3.5 h-3.5 text-[#0071E3]" />
+                  <span>{locationName || qr.name}</span>
+                </div>
+                {phoneNumber && (
+                  <div className="flex items-center gap-2 text-[#1B873F]">
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>WhatsApp updates sent to {phoneNumber}</span>
+                  </div>
+                )}
+                {duplicateResult?.isDuplicate && duplicateAcknowledged && (
+                  <div className="flex items-center gap-2 text-[#B25E00]">
+                    <Info className="w-3.5 h-3.5" />
+                    <span>Linked with open ticket #{duplicateResult.parentTicketId}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-2.5 pt-2">
+                <Button
+                  className="w-full h-12 text-sm font-semibold rounded-2xl shadow-[0_2px_8px_rgba(0,113,227,0.25)] flex items-center justify-center gap-2"
+                  onClick={() => navigate(`/track/${ticketId}${trackingToken ? `/${trackingToken}` : ""}`)}
+                >
+                  Track Ticket Progress
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="w-full h-11 text-xs font-medium rounded-xl"
+                  onClick={() => {
+                    setTicketId(null);
+                    setTrackingToken(null);
+                    setDescription("");
+                    setPhotoFile(null);
+                    setPhotoPreview(null);
+                    setAiResult(null);
+                    setDuplicateResult(null);
+                    setDuplicateAcknowledged(false);
+                  }}
+                >
+                  Submit Another Report
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+        <div className="text-center text-xs text-[#86868B] pb-2">
+          Campus Pulse • Real-Time SLA Monitoring Active
+        </div>
+      </div>
+    );
+  }
+
+  // ─── MAIN REPORTING FORM VIEW ───
+  return (
+    <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col selection:bg-[#0071E3]/15 selection:text-[#0071E3]">
+      {/* Header */}
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/80 border-b border-black/[0.06]">
+        <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6E6E73] hover:text-[#1D1D1F] transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Cancel
+          </Link>
+          <div className="text-center">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#86868B]">
+              New Complaint
+            </span>
+          </div>
+          <span className="text-xs font-mono font-medium text-[#0071E3] bg-[#0071E3]/10 px-2.5 py-1 rounded-full">
+            {qrId}
+          </span>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 sm:py-8 space-y-6">
+        {/* Verified Facility Card */}
+        <div className="bg-white border border-black/[0.08] rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02)] flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-[#0071E3]/10 text-[#0071E3] flex items-center justify-center shrink-0">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-[#1D1D1F] truncate">{qr.name}</span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#1B873F] bg-[#EAF8EE] px-2 py-0.5 rounded-full border border-[#C3ECD1]">
+                <span className="w-1 h-1 rounded-full bg-[#34C759]" />
+                Verified
+              </span>
+            </div>
+            <p className="text-xs text-[#6E6E73] truncate mt-0.5">
+              {locationName || "Campus Facility Area"}
+            </p>
+            {qr.department && (
+              <p className="text-[11px] text-[#86868B] mt-1">
+                Mapped Department: <span className="font-medium text-[#1D1D1F]">{qr.department}</span>
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Reporting Form */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Section: Description */}
+          <div className="bg-white border border-black/[0.08] rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-3">
+            <div className="flex items-center justify-between">
+              <label htmlFor="description" className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                Issue Description <span className="text-[#FF3B30]">*</span>
+              </label>
+              <span className="text-[11px] text-[#86868B]">
+                {description.length}/2000
+              </span>
+            </div>
+
+            <Textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              required
+              minLength={10}
+              maxLength={2000}
+              placeholder="Describe what is broken or malfunctioning with as much detail as possible..."
+              className="min-h-[110px]"
+            />
+
+            {/* Quick Inspiration Pills */}
+            <div className="pt-1 flex flex-wrap gap-1.5 items-center">
+              <span className="text-[11px] text-[#86868B] mr-1">Suggestions:</span>
+              {[
+                "Water leak / Tap broken",
+                "Exposed wiring / Sparking",
+                "AC not cooling",
+                "Ceiling light flickering",
+              ].map((chip) => (
+                <button
+                  type="button"
+                  key={chip}
+                  onClick={() => setDescription((prev) => (prev ? `${prev}. ${chip}` : chip))}
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-[#F5F5F7] hover:bg-[#EAEAEA] text-[#6E6E73] hover:text-[#1D1D1F] border border-black/[0.04] transition-colors"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Section: Photo Attachment */}
+          <div className="bg-white border border-black/[0.08] rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                Visual Evidence <span className="text-[#86868B] font-normal">(Optional, max 5 MB)</span>
+              </label>
+              {photoFile && (
+                <span className="text-[11px] text-[#86868B]">
+                  {(photoFile.size / (1024 * 1024)).toFixed(2)} MB
+                </span>
+              )}
+            </div>
+
+            <input
+              id="photo"
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={(e) => {
+                setUploadError(null);
+                handleFileChange(e);
+              }}
+              className="hidden"
+            />
+
+            {!photoPreview ? (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-6 px-4 rounded-xl border border-dashed border-black/15 hover:border-[#0071E3]/50 bg-[#FBFBFD] hover:bg-[#F5F5F7] transition-all flex flex-col items-center justify-center gap-2 group cursor-pointer"
+              >
+                <div className="w-10 h-10 rounded-full bg-white border border-black/[0.08] flex items-center justify-center text-[#6E6E73] group-hover:text-[#0071E3] transition-colors shadow-2xs">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div className="text-xs font-medium text-[#1D1D1F]">
+                  Take a photo or upload from library
+                </div>
+                <div className="text-[11px] text-[#86868B]">
+                  Supports JPG, PNG, WEBP for multimodal AI analysis
+                </div>
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative rounded-xl overflow-hidden border border-black/10 bg-black/5 aspect-video max-h-56">
+                  <img src={photoPreview} alt="Issue preview" className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={removePhoto}
+                    className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-black/70 hover:bg-black/90 text-white flex items-center justify-center backdrop-blur-xs transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between text-xs text-[#6E6E73] px-1">
+                  <span className="truncate max-w-[200px]">{photoFile?.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-[#0071E3] hover:underline font-medium"
+                  >
+                    Replace Photo
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {photoError && (
+              <p className="text-xs text-[#FF3B30] flex items-center gap-1.5 pt-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {photoError}
+              </p>
+            )}
+            {uploadError && (
+              <div className="rounded-xl border border-[#FF3B30]/20 bg-[#FEECEC] p-3 text-xs text-[#D70015]">
+                {uploadError}
+              </div>
+            )}
+          </div>
+
+          {/* Section: WhatsApp Updates */}
+          <div className="bg-white border border-black/[0.08] rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-2">
+            <label htmlFor="phone" className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+              WhatsApp Notification <span className="text-[#86868B] font-normal">(Optional)</span>
+            </label>
+            <Input
+              id="phone"
+              type="tel"
+              value={phoneNumber}
+              onChange={(e) => {
+                setPhoneNumber(e.target.value);
+                if (phoneError) setPhoneError(null);
+              }}
+              placeholder="+91 98765 43210"
+              className="h-11"
+            />
+            <p className="text-[11px] text-[#86868B] leading-relaxed">
+              Receive status changes, staff resolution photos, and verification prompts directly on WhatsApp.
+            </p>
+            {phoneError && (
+              <p className="text-xs text-[#FF3B30] flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {phoneError}
+              </p>
+            )}
+          </div>
+
+          {/* ─── Duplicate Match Notice ─── */}
+          {duplicateResult?.isDuplicate && !duplicateAcknowledged && (
+            <div className="bg-[#FFF8E6] border border-[#FFE7A8] rounded-2xl p-5 space-y-3">
+              <div className="flex items-center gap-2 text-[#B25E00] font-semibold text-sm">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Similar Active Report Found</span>
+              </div>
+              <p className="text-xs text-[#8A4800] leading-relaxed">
+                Another student recently submitted an issue at this location. Submitting will link your report so you receive all updates and help prioritize the ticket.
+              </p>
+              {duplicateResult.matches?.slice(0, 2).map((m) => (
+                <div key={m.ticketId} className="bg-white/80 rounded-xl p-2.5 text-xs border border-[#FFD880] flex items-center justify-between">
+                  <div>
+                    <span className="font-mono font-bold text-[#1D1D1F] mr-1.5">{m.ticketId}</span>
+                    <span className="text-[#6E6E73]">{m.title}</span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#B25E00]">
+                    {Math.round(m.similarity * 100)}% match
+                  </span>
+                </div>
+              ))}
+              <Button
+                type="button"
+                className="w-full h-10 bg-[#B25E00] hover:bg-[#974E00] text-white text-xs font-semibold rounded-xl"
+                onClick={() => setDuplicateAcknowledged(true)}
+              >
+                Link to Existing Ticket & Continue
+              </Button>
+            </div>
+          )}
+
+          {duplicateCheckLoading && (
+            <div className="text-center text-xs text-[#86868B] flex items-center justify-center gap-2 py-1">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#0071E3]" />
+              Checking facility history for related reports...
+            </div>
+          )}
+
+          {/* ─── AI Analysis Action & Result ─── */}
+          {!aiResult && !useManual && (
+            <div className="pt-2">
+              <Button
+                type="button"
+                className="w-full h-12 text-sm font-semibold rounded-2xl shadow-[0_2px_8px_rgba(0,113,227,0.25)] flex items-center justify-center gap-2"
+                onClick={handleAnalyze}
+                disabled={aiLoading || !description.trim() || description.trim().length < 10}
+              >
+                {aiLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Analyzing with Multimodal AI...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Analyze & Review Issue
+                  </>
+                )}
+              </Button>
+              <p className="text-center text-[11px] text-[#86868B] mt-2">
+                Gemini will inspect your photo and text to recommend category, severity, and resolution SLA.
+              </p>
+            </div>
+          )}
+
+          {aiError && (
+            <div className="rounded-xl border border-black/10 bg-[#F5F5F7] p-3 text-xs text-[#6E6E73] flex items-start gap-2">
+              <Info className="w-4 h-4 text-[#0071E3] shrink-0 mt-0.5" />
+              <span>{aiError}</span>
+            </div>
+          )}
+
+          {/* ─── AI Verified Assessment Card ─── */}
+          {aiResult && !useManual && (duplicateResult === null || !duplicateResult.isDuplicate || duplicateAcknowledged) && (
+            <div className="bg-white border border-[#0071E3]/25 rounded-2xl p-5 shadow-[0_4px_20px_rgba(0,113,227,0.06)] space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-black/[0.06]">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-[#0071E3]/10 text-[#0071E3] flex items-center justify-center">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#1D1D1F]">AI Assessment</h3>
+                    <div className="text-[10px] text-[#86868B]">Google Gemini 2.5 Flash</div>
+                  </div>
+                </div>
+                <Badge
+                  variant={aiResult.confidence >= AI_CONFIDENCE_THRESHOLD ? "success" : "warning"}
+                  className="text-[11px]"
+                >
+                  {Math.round(aiResult.confidence * 100)}% Confidence
+                </Badge>
+              </div>
+
+              {lowConfidenceWarning && (
+                <div className="rounded-xl bg-[#FFF8E6] border border-[#FFE7A8] p-3 text-xs text-[#B25E00] flex items-start gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>Lower confidence detected. This issue will be flagged for senior administrator review.</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-[#F5F5F7] p-3 rounded-xl border border-black/[0.04]">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Category</div>
+                  <div className="font-semibold text-[#1D1D1F] mt-0.5">{aiResult.category}</div>
+                </div>
+
+                <div className="bg-[#F5F5F7] p-3 rounded-xl border border-black/[0.04]">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Priority & SLA</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className={`font-bold ${
+                      aiResult.priority === "P1" || aiResult.priority === "P2" ? "text-[#D70015]" :
+                      aiResult.priority === "P3" ? "text-[#B25E00]" : "text-[#1B873F]"
+                    }`}>
+                      {aiResult.priority}
+                    </span>
+                    <span className="text-[#86868B]">({aiResult.severity})</span>
+                  </div>
+                </div>
+
+                {aiResult.reportedArea && (
+                  <div className="col-span-2 bg-[#F5F5F7] p-3 rounded-xl border border-black/[0.04]">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Sub-Location</div>
+                    <div className="font-medium text-[#1D1D1F] mt-0.5">{aiResult.reportedArea}</div>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-xs text-[#6E6E73] bg-[#FBFBFD] p-3 rounded-xl border border-black/[0.04] space-y-1">
+                <div><span className="font-semibold text-[#1D1D1F]">Summary:</span> {aiResult.summary}</div>
+                {aiResult.suggestedAction && (
+                  <div><span className="font-semibold text-[#1D1D1F]">Suggested Action:</span> {aiResult.suggestedAction}</div>
+                )}
+              </div>
+
+              <div className="flex gap-2.5 pt-1">
                 <Button
                   type="button"
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                  size="lg"
-                  onClick={handleAnalyze}
-                  disabled={aiLoading || !description.trim() || description.trim().length < 10}
+                  variant="outline"
+                  className="flex-1 h-11 text-xs rounded-xl border-black/10"
+                  onClick={() => {
+                    setUseManual(true);
+                    setLowConfidenceWarning(false);
+                  }}
                 >
-                  {aiLoading ? (
-                    <><span className="animate-pulse">🤖</span> Analyzing your issue...</>
+                  <SlidersHorizontal className="w-3.5 h-3.5 mr-1" />
+                  Modify Manually
+                </Button>
+                <Button
+                  type="submit"
+                  className="flex-1 h-11 text-xs font-semibold rounded-xl shadow-[0_1px_3px_rgba(0,113,227,0.3)]"
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Submitting...
+                    </span>
                   ) : (
-                    <>🤖 Analyze & Submit</>
+                    "Confirm & Submit"
                   )}
                 </Button>
-              )}
+              </div>
+            </div>
+          )}
 
-              {aiError && (
-                <div className="rounded-md border border-red-500/50 bg-red-900/20 p-3 text-xs text-red-400">
-                  {aiError}
-                </div>
-              )}
+          {/* ─── Manual Category & Severity Selector ─── */}
+          {useManual && (duplicateResult === null || !duplicateResult.isDuplicate || duplicateAcknowledged) && (
+            <div className="bg-white border border-black/[0.08] rounded-2xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-black/[0.06]">
+                <h3 className="text-sm font-semibold text-[#1D1D1F]">Manual Details</h3>
+                {aiResult && (
+                  <button
+                    type="button"
+                    onClick={() => setUseManual(false)}
+                    className="text-xs text-[#0071E3] hover:underline font-medium"
+                  >
+                    Restore AI Assessment
+                  </button>
+                )}
+              </div>
 
-              {/* Duplicate warning */}
-              {duplicateResult?.isDuplicate && !duplicateAcknowledged && (
-                <div className="rounded-md border border-yellow-500/50 bg-yellow-900/20 p-4 space-y-3">
-                  <p className="text-sm font-semibold text-yellow-400">⚠️ Similar Issue Already Reported</p>
-                  <p className="text-xs text-yellow-300">
-                    A similar complaint has already been submitted at this location:
-                  </p>
-                  {duplicateResult.matches?.slice(0, 2).map((m) => (
-                    <div key={m.ticketId} className="text-xs text-yellow-300 bg-yellow-900/30 rounded p-2">
-                      <span className="font-mono font-bold">{m.ticketId}</span> — {m.title} ({Math.round(m.similarity * 100)}% similar)
-                    </div>
+              <div className="space-y-1.5">
+                <label htmlFor="manualCategory" className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                  Category
+                </label>
+                <select
+                  id="manualCategory"
+                  value={manualCategory}
+                  onChange={(e) => setManualCategory(e.target.value as Category)}
+                  className="w-full h-11 rounded-xl border border-black/10 bg-white px-3.5 text-sm text-[#1D1D1F] outline-none focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/10"
+                >
+                  {CATEGORIES.map((cat) => (
+                    <option key={cat.value} value={cat.value}>{cat.label}</option>
                   ))}
-                  <p className="text-xs text-yellow-300">Your report will be linked to the existing ticket to help prioritize it.</p>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white"
-                      onClick={() => setDuplicateAcknowledged(true)}
-                    >
-                      ✅ Submit Anyway (Link to Existing)
-                    </Button>
-                  </div>
-                </div>
-              )}
+                </select>
+              </div>
 
-              {/* Duplicate check loading */}
-              {duplicateCheckLoading && (
-                <div className="text-xs text-slate-400 text-center animate-pulse">
-                  🔍 Checking for similar reports...
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <label htmlFor="manualArea" className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                  Specific Area or Room
+                </label>
+                <Input
+                  id="manualArea"
+                  value={manualArea}
+                  onChange={(e) => setManualArea(e.target.value)}
+                  placeholder="e.g. Room 204, South Wing, 3rd Floor"
+                  className="h-11"
+                />
+              </div>
 
-              {/* AI Result */}
-              {aiResult && !useManual && (duplicateResult === null || !duplicateResult.isDuplicate || duplicateAcknowledged) && (
-                <div className="space-y-3 rounded-md border border-slate-600 bg-slate-800/50 p-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-white">🤖 AI Analysis</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${aiResult.confidence >= AI_CONFIDENCE_THRESHOLD ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
-                      {Math.round(aiResult.confidence * 100)}% confidence
-                    </span>
-                  </div>
+              <div className="space-y-1.5">
+                <label htmlFor="manualSeverity" className="text-xs font-semibold uppercase tracking-wider text-[#6E6E73]">
+                  Severity Rating
+                </label>
+                <select
+                  id="manualSeverity"
+                  value={manualSeverity}
+                  onChange={(e) => setManualSeverity(e.target.value as Severity)}
+                  className="w-full h-11 rounded-xl border border-black/10 bg-white px-3.5 text-sm text-[#1D1D1F] outline-none focus:border-[#0071E3] focus:ring-4 focus:ring-[#0071E3]/10"
+                >
+                  <option value="LOW">Low (Cosmetic, furniture, minor aesthetics)</option>
+                  <option value="MEDIUM">Medium (Failed lights, water tap leak, fan not working)</option>
+                  <option value="HIGH">High (Sparks, exposed wiring, gas smell, water near power)</option>
+                  <option value="CRITICAL">Critical (Immediate safety or structural hazard)</option>
+                </select>
+              </div>
 
-                  {lowConfidenceWarning && (
-                    <div className="rounded bg-yellow-900/20 border border-yellow-500/30 p-2 text-xs text-yellow-400">
-                      ⚠️ Low confidence — this ticket will be flagged for manual admin review.
-                    </div>
-                  )}
+              <Button
+                type="submit"
+                className="w-full h-12 text-sm font-semibold rounded-2xl shadow-[0_2px_8px_rgba(0,113,227,0.25)] mt-2"
+                disabled={submitting || !description.trim() || description.trim().length < 10}
+              >
+                {submitting ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Submitting Complaint...
+                  </span>
+                ) : (
+                  "Submit Complaint"
+                )}
+              </Button>
+            </div>
+          )}
+        </form>
+      </main>
 
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
-                    <div><span className="font-medium text-slate-400">Title:</span> {aiResult.title}</div>
-                    <div><span className="font-medium text-slate-400">Category:</span> {aiResult.category}</div>
-                    <div><span className="font-medium text-slate-400">Severity:</span>
-                      <span className={`ml-1 font-semibold ${aiResult.severity === 'HIGH' || aiResult.severity === 'CRITICAL' ? 'text-red-400' : aiResult.severity === 'MEDIUM' ? 'text-yellow-400' : 'text-green-400'}`}>
-                        {aiResult.severity}
-                      </span>
-                    </div>
-                    <div><span className="font-medium text-slate-400">Priority:</span>
-                      <span className={`ml-1 font-semibold ${aiResult.priority === 'P1' || aiResult.priority === 'P2' ? 'text-red-400' : aiResult.priority === 'P3' ? 'text-yellow-400' : 'text-green-400'}`}>
-                        {aiResult.priority}
-                      </span>
-                    </div>
-                    {aiResult.reportedArea && (
-                      <div className="col-span-2"><span className="font-medium text-slate-400">Area:</span> {aiResult.reportedArea}</div>
-                    )}
-                  </div>
-                  <div className="text-xs space-y-1 text-slate-300">
-                    <p><span className="font-medium text-slate-400">Summary:</span> {aiResult.summary}</p>
-                    <p><span className="font-medium text-slate-400">Suggested action:</span> {aiResult.suggestedAction}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button type="button" variant="outline" className="flex-1 border-slate-600 text-slate-300 text-xs" size="sm" onClick={() => { setUseManual(true); setLowConfidenceWarning(false); }}>
-                      ✏️ Edit Manually
-                    </Button>
-                    <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-xs" size="sm" disabled={submitting}>
-                      {submitting ? "Submitting..." : "✅ Confirm & Submit"}
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Manual form */}
-              {useManual && (duplicateResult === null || !duplicateResult.isDuplicate || duplicateAcknowledged) && (
-                <div className="space-y-3 rounded-md border border-slate-600 bg-slate-800/30 p-4">
-                  <h3 className="text-sm font-semibold text-white">Manual Details</h3>
-                  <div className="space-y-2">
-                    <label htmlFor="manualCategory" className="text-sm font-medium text-slate-300">Category</label>
-                    <select
-                      id="manualCategory"
-                      value={manualCategory}
-                      onChange={(e) => setManualCategory(e.target.value as Category)}
-                      className="flex h-9 w-full rounded-md border border-slate-600 bg-slate-800 text-slate-100 px-3 py-1 text-sm"
-                    >
-                      {CATEGORIES.map((cat) => (
-                        <option key={cat.value} value={cat.value}>{cat.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label htmlFor="manualArea" className="text-sm font-medium text-slate-300">Exact Area</label>
-                    <input
-                      id="manualArea"
-                      value={manualArea}
-                      onChange={(e) => setManualArea(e.target.value)}
-                      placeholder="e.g. Room 204, Lab Block B, Boys Hostel Wing A"
-                      className="flex h-9 w-full rounded-md border border-slate-600 bg-slate-800 text-slate-100 px-3 py-1 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label htmlFor="manualSeverity" className="text-sm font-medium text-slate-300">Severity</label>
-                    <select
-                      id="manualSeverity"
-                      value={manualSeverity}
-                      onChange={(e) => setManualSeverity(e.target.value as Severity)}
-                      className="flex h-9 w-full rounded-md border border-slate-600 bg-slate-800 text-slate-100 px-3 py-1 text-sm"
-                    >
-                      <option value="LOW">🟢 Low (minor cosmetic/furniture issues)</option>
-                      <option value="MEDIUM">🟡 Medium (broken equipment, leaks, failed lights)</option>
-                      <option value="HIGH">🔴 High (exposed wiring, blocked exits, gas smell)</option>
-                      <option value="CRITICAL">🚨 Critical (immediate safety hazard)</option>
-                    </select>
-                  </div>
-                  {aiResult && (
-                    <Button type="button" variant="ghost" size="sm" className="text-xs text-slate-400" onClick={() => { setUseManual(false); }}>
-                      ← Use AI Result Instead
-                    </Button>
-                  )}
-                  <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" size="lg" disabled={submitting || !description.trim() || description.trim().length < 10}>
-                    {submitting ? "Submitting..." : "Submit Complaint"}
-                  </Button>
-                </div>
-              )}
-            </form>
-          </CardContent>
-        </Card>
-
-        <p className="text-xs text-center text-slate-600">
-          Powered by AI Campus Complaint System · Your data is secure
-        </p>
-      </div>
+      <footer className="text-center text-xs text-[#86868B] py-6 border-t border-black/[0.06] bg-white">
+        Campus Pulse • Smart Facility Resolution System
+      </footer>
     </div>
   );
 }

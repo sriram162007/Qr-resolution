@@ -1,52 +1,49 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { getTicket, getTicketActivities, updateTicketDetail } from "@/services/ticketService";
+import { getTicket, getTicketActivities, updateTicketDetail, getUsers } from "@/services/ticketService";
 import { getLocation } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
-import { getUsers } from "@/services/ticketService";
 import { suggestResolution } from "@/services/aiResolutionService";
 import { buildChangeList, normalizePhoneNumber } from "@/services/whatsappService";
 import { uploadResolutionPhoto } from "@/services/supabaseService";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, MapPin, X, Loader2, Sparkles, Copy, Check, AlertTriangle, Upload, ExternalLink } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  ArrowLeft,
+  MapPin,
+  X,
+  Loader2,
+  Sparkles,
+  Copy,
+  Check,
+  AlertTriangle,
+  Upload,
+  ExternalLink,
+  Clock,
+  Star,
+  LogOut,
+  Camera,
+  Image as ImageIcon,
+  CheckCircle2,
+} from "lucide-react";
 import { getEstimateString } from "@/lib/resolutionEstimate";
 import { CAMPUS_CATEGORIES } from "@/types";
 import type { Ticket, TicketStatus, TicketPriority, TicketSeverity, TicketActivity } from "@/types";
 
 const STATUSES: TicketStatus[] = ["OPEN", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "VERIFIED", "CLOSED", "REOPENED"];
 const PRIORITIES: TicketPriority[] = ["P1", "P2", "P3", "P4"];
-const SEVERITIES: TicketSeverity[] = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 
 const STATUS_STEPS: TicketStatus[] = ["OPEN", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "VERIFIED"];
-
-function activityIcon(type: string): string {
-  switch (type) {
-    case "created": return "📥";
-    case "status": return "🔄";
-    case "assignment": return "👨‍💻";
-    case "resolution": return "✅";
-    case "evidence": return "📷";
-    case "activity_update": return "📝";
-    case "escalation": return "⚠️";
-    case "duplicate": return "🔗";
-    case "duplicate_link": return "🔗";
-    case "ai_override": return "🤖";
-    case "priority_override": return "🔴";
-    case "routing": return "🗺️";
-    case "verification": return "✅";
-    case "reopened": return "🔄";
-    default: return "📋";
-  }
-}
 
 export default function AdminTicketDetail() {
   const { ticketId } = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
-  const { user, authLoading } = useAuth();
+  const { user, authLoading, logout } = useAuth();
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [locationName, setLocationName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,7 +105,7 @@ export default function AdminTicketDetail() {
         const data = await getTicket(ticketId);
         if (!cancelled) {
           if (!data) {
-            setError("Ticket not found");
+            setError("Ticket reference not found.");
             return;
           }
           setTicket(data);
@@ -128,7 +125,7 @@ export default function AdminTicketDetail() {
           if (loc) setLocationName(getLocationPath([loc], loc.id));
         }
       } catch {
-        if (!cancelled) setError("Failed to load ticket");
+        if (!cancelled) setError("Failed to load ticket details.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -176,7 +173,11 @@ export default function AdminTicketDetail() {
   const handleResolutionPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     setPhotoUploadError(null);
-    if (!file) { setResolutionPhotoFile(null); setResolutionPhotoPreview(null); return; }
+    if (!file) {
+      setResolutionPhotoFile(null);
+      setResolutionPhotoPreview(null);
+      return;
+    }
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       setPhotoUploadError("Invalid file type. JPG, PNG, or WEBP only.");
       return;
@@ -197,7 +198,7 @@ export default function AdminTicketDetail() {
       const url = await uploadResolutionPhoto(resolutionPhotoFile, ticketId);
       const actor = { id: user?.email || undefined, name: user?.email || undefined };
       await updateTicketDetail(ticket.id, { resolutionPhotoUrl: url }, actor);
-      setSuccess("Resolution photo uploaded successfully.");
+      setSuccess("Resolution proof photo uploaded successfully.");
       setResolutionPhotoFile(null);
       setResolutionPhotoPreview(null);
       if (resolutionPhotoRef.current) resolutionPhotoRef.current.value = "";
@@ -241,7 +242,7 @@ export default function AdminTicketDetail() {
         adminOverrideReason: isOverride && adminOverrideReason ? adminOverrideReason : undefined,
       }, actor);
 
-      setSuccess("Ticket updated successfully");
+      setSuccess("Ticket saved and updated successfully.");
       const data = await getTicket(ticketId);
       if (data) {
         setTicket(data);
@@ -287,18 +288,8 @@ export default function AdminTicketDetail() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-          }).then((response) => {
-            if (!response.ok) {
-              response.text().then((text) => {
-                console.error("[Ticket Update] WhatsApp API error", { status: response.status, body: text });
-              });
-            } else {
-              response.json().then((json) => {
-                console.log("[Ticket Update] WhatsApp sent", { messageSid: json.messageSid });
-              });
-            }
           }).catch((whatsappError) => {
-            console.error("[Ticket Update] WhatsApp notification failed", whatsappError);
+            console.error("[Ticket Update] WhatsApp notification error", whatsappError);
           });
         }
       }
@@ -337,40 +328,39 @@ export default function AdminTicketDetail() {
     }
   };
 
-  const useSuggestedAction = () => {
-    if (!aiSuggestion) return;
-    setResolutionSummary(aiSuggestion.recommendedAction);
+  const handleCopyTicketId = () => {
+    if (!ticket) return;
+    navigator.clipboard.writeText(ticket.ticketId);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
   };
-
-  if (authLoading || !user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
-      </div>
-    );
-  }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+      <div className="min-h-screen bg-[#FBFBFD] flex flex-col items-center justify-center p-4">
+        <div className="w-12 h-12 rounded-2xl bg-white border border-black/10 shadow-xs flex items-center justify-center">
+          <Loader2 className="w-6 h-6 animate-spin text-[#0071E3]" />
+        </div>
+        <p className="text-xs text-[#86868B] mt-3 font-medium">Opening ticket workspace...</p>
       </div>
     );
   }
 
   if (error || !ticket) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 px-4 py-8">
-        <div className="w-full max-w-sm space-y-6">
-          <Card className="bg-slate-900 border-slate-700">
-            <CardContent className="p-6 text-center">
-              <p className="text-sm text-slate-400">{error || "The requested ticket does not exist."}</p>
-              <Button className="mt-4" variant="outline" onClick={() => navigate("/admin/tickets")}>
-                Back to Tickets
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex items-center justify-center p-4">
+        <Card className="max-w-md w-full border border-black/[0.08] shadow-[0_4px_24px_rgba(0,0,0,0.04)] rounded-3xl p-8 text-center space-y-4 bg-white">
+          <div className="w-14 h-14 rounded-2xl bg-[#FF3B30]/10 border border-[#FF3B30]/20 mx-auto flex items-center justify-center text-[#FF3B30]">
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Ticket Not Found</h1>
+            <p className="text-sm text-[#6E6E73]">{error || "The requested ticket record does not exist."}</p>
+          </div>
+          <Button asChild variant="outline" className="w-full">
+            <Link to="/admin/tickets">Back to Ticket Roster</Link>
+          </Button>
+        </Card>
       </div>
     );
   }
@@ -378,355 +368,478 @@ export default function AdminTicketDetail() {
   const currentStatusIndex = STATUS_STEPS.indexOf(ticket.status);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-      {/* Header */}
-      <div className="border-b border-slate-800 bg-slate-900/50">
-        <div className="container mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col selection:bg-[#0071E3]/15 selection:text-[#0071E3]">
+      {/* ─── Apple Operations Navigation Bar ─── */}
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/85 border-b border-black/[0.06]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/admin/tickets")} className="text-slate-400 hover:text-white">
-              <ArrowLeft className="h-4 w-4" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/admin/tickets")}
+              className="h-9 px-2 text-[#6E6E73] hover:text-[#1D1D1F] rounded-xl flex items-center gap-1"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span className="hidden sm:inline text-xs font-medium">Tickets</span>
             </Button>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight font-mono text-white">{ticket.ticketId}</h1>
-              <p className="text-xs text-slate-400">Ticket Details</p>
+
+            <div className="h-4 w-px bg-black/10" />
+
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm font-bold text-[#1D1D1F]">
+                {ticket.ticketId}
+              </span>
+              <button
+                onClick={handleCopyTicketId}
+                className="text-[#86868B] hover:text-[#1D1D1F] transition-colors"
+                title="Copy reference"
+              >
+                {copySuccess ? <Check className="w-3.5 h-3.5 text-[#1B873F]" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
             </div>
-            <div className="ml-auto flex items-center gap-2">
-              {ticket.slaBreached && (
-                <span className="text-xs bg-orange-900/50 text-orange-400 border border-orange-500/30 px-2 py-1 rounded-full">⚠️ SLA Breached</span>
-              )}
-              {ticket.isDuplicate && (
-                <span className="text-xs bg-indigo-900/50 text-indigo-400 border border-indigo-500/30 px-2 py-1 rounded-full">🔗 Duplicate</span>
-              )}
-              {(ticket.anomalyFlags?.length ?? 0) > 0 && (
-                <span className="text-xs bg-purple-900/50 text-purple-400 border border-purple-500/30 px-2 py-1 rounded-full">⚠️ Anomaly</span>
-              )}
-              {(ticket as any).needsAdminReview && !ticket.adminOverride && (
-                <span className="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-500/30 px-2 py-1 rounded-full">🔍 Needs Review</span>
-              )}
-            </div>
+
+            <Badge
+              variant={
+                ticket.priority === "P1" ? "destructive" :
+                ticket.priority === "P2" ? "warning" : "secondary"
+              }
+              className="text-[11px] px-2.5 py-0.5"
+            >
+              {ticket.priority}
+            </Badge>
+
+            <Badge variant="outline" className="text-[11px]">
+              {ticket.status.replace(/_/g, " ")}
+            </Badge>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {ticket.trackingToken && (
+              <Button asChild variant="outline" size="sm" className="h-9 text-xs rounded-xl border-black/10 bg-white">
+                <Link
+                  to={`/track/${ticket.ticketId}/${ticket.trackingToken}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-[#0071E3]" />
+                  <span className="hidden md:inline">Student View</span>
+                </Link>
+              </Button>
+            )}
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={logout}
+              className="h-9 px-2.5 text-xs text-[#6E6E73] hover:text-[#D70015] rounded-xl"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </Button>
           </div>
         </div>
-      </div>
+      </header>
 
-      <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      {/* ─── Main Content ─── */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+        {/* Status Alerts Ribbon */}
         {error && (
-          <div className="mb-4 rounded-md border border-red-500/30 bg-red-900/20 p-3 text-sm text-red-400">{error}</div>
+          <div className="rounded-2xl border border-[#FF3B30]/20 bg-[#FEECEC] p-4 text-xs text-[#D70015]">
+            {error}
+          </div>
         )}
         {success && (
-          <div className="mb-4 rounded-md border border-green-500/30 bg-green-900/20 p-3 text-sm text-green-400">{success}</div>
+          <div className="rounded-2xl border border-[#34C759]/20 bg-[#EAF8EE] p-4 text-xs text-[#1B873F]">
+            {success}
+          </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* ─── Left Column (2 spans): Primary Workspace ─── */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Issue Details */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white">Issue</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div>
-                  <h3 className="font-semibold text-lg text-white">{ticket.title}</h3>
-                  <p className="text-sm text-slate-400 mt-1 whitespace-pre-wrap">{ticket.description}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="text-slate-300"><span className="font-medium text-slate-400">Category:</span> {ticket.category}</div>
-                  {ticket.subcategory && (
-                    <div className="text-slate-300"><span className="font-medium text-slate-400">Subcategory:</span> {ticket.subcategory}</div>
-                  )}
-                  {ticket.reportedArea && (
-                    <div className="col-span-2 text-slate-300"><span className="font-medium text-slate-400">Reported Area:</span> {ticket.reportedArea}</div>
-                  )}
-                  {ticket.department && (
-                    <div className="text-slate-300"><span className="font-medium text-slate-400">Department:</span> {ticket.department}</div>
-                  )}
-                  <div className="col-span-2 flex items-center gap-1">
-                    <MapPin className="h-3 w-3 text-slate-500" />
-                    <span className="text-slate-400 text-xs">{locationName || ticket.locationId}</span>
+            {/* Issue Overview Card */}
+            <Card>
+              <div className="p-6 space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">
+                      {ticket.title}
+                    </h1>
+                    <p className="text-xs text-[#6E6E73] flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5" />
+                      Reported {ticket.createdAt.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </p>
                   </div>
-                  {ticket.photoUrl && (
-                    <div className="col-span-2">
-                      <span className="font-medium text-slate-400 text-sm">Issue Photo</span>
-                      <div className="mt-2">
-                        <img
-                          src={ticket.photoUrl}
-                          alt="Issue photo"
-                          className="max-h-48 w-full rounded-md border border-slate-700 object-cover cursor-pointer"
-                          onClick={() => setLightbox(ticket.photoUrl!)}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {ticket.resolutionPhotoUrl && (
-                    <div className="col-span-2">
-                      <span className="font-medium text-slate-400 text-sm">Resolution Evidence</span>
-                      <div className="mt-2">
-                        <img
-                          src={ticket.resolutionPhotoUrl}
-                          alt="Resolution evidence"
-                          className="max-h-48 w-full rounded-md border border-green-500/30 object-cover cursor-pointer"
-                          onClick={() => setLightbox(ticket.resolutionPhotoUrl!)}
-                        />
-                      </div>
-                    </div>
-                  )}
+
+                  <div className="flex flex-wrap gap-1.5 shrink-0">
+                    {ticket.slaBreached && (
+                      <Badge variant="destructive" className="text-[10px]">
+                        SLA Overdue
+                      </Badge>
+                    )}
+                    {ticket.isDuplicate && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Duplicate Linked
+                      </Badge>
+                    )}
+                    {(ticket.anomalyFlags?.length ?? 0) > 0 && (
+                      <Badge variant="warning" className="text-[10px]">
+                        Advisory Anomaly
+                      </Badge>
+                    )}
+                  </div>
                 </div>
-              </CardContent>
+
+                <div className="bg-[#F5F5F7] p-4 rounded-2xl text-xs text-[#1D1D1F] leading-relaxed whitespace-pre-wrap border border-black/[0.04]">
+                  {ticket.description}
+                </div>
+
+                {/* Facility & Location Details */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-1 text-xs">
+                  <div className="p-3 bg-[#FBFBFD] rounded-xl border border-black/[0.05]">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Facility Location</div>
+                    <div className="font-semibold text-[#1D1D1F] mt-0.5 truncate flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-[#0071E3] shrink-0" />
+                      <span className="truncate">{locationName || ticket.locationId}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-[#FBFBFD] rounded-xl border border-black/[0.05]">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Department</div>
+                    <div className="font-semibold text-[#1D1D1F] mt-0.5 truncate">
+                      {ticket.department || "Operations"}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-[#FBFBFD] rounded-xl border border-black/[0.05] col-span-2 sm:col-span-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#86868B]">Contact Phone</div>
+                    <div className="font-semibold text-[#1D1D1F] mt-0.5">
+                      {ticket.phoneNumber || "None provided"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reporter Photo Evidence */}
+                {ticket.photoUrl && (
+                  <div className="pt-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[#86868B]">
+                      Student Photo Attachment
+                    </span>
+                    <div
+                      onClick={() => setLightbox(ticket.photoUrl || null)}
+                      className="mt-1.5 rounded-2xl overflow-hidden border border-black/10 max-h-56 bg-black/5 cursor-pointer group relative"
+                    >
+                      <img src={ticket.photoUrl} alt="Complaint evidence" className="w-full h-full object-cover group-hover:opacity-90 transition-opacity" />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-1.5">
+                        <ImageIcon className="w-4 h-4" />
+                        Click to Zoom
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </Card>
 
-            {/* Routing & Duplicate Info */}
-            {(ticket.routingDecision || ticket.isDuplicate || ticket.parentTicketId) && (
-              <Card className="bg-slate-900 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white text-sm">Routing & Duplicate Info</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  {ticket.routingDecision && (
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ticket.routingDecision === 'AUTO' ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
-                        {ticket.routingDecision}
-                      </span>
-                      {ticket.routingReason && <span className="text-slate-400 text-xs">{ticket.routingReason}</span>}
+            {/* Lifecycle Progress Stepper */}
+            <Card>
+              <div className="p-5 pb-3 border-b border-black/[0.06]">
+                <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                  Lifecycle Progression
+                </h2>
+              </div>
+              <div className="p-5">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
+                  {STATUS_STEPS.map((s, index) => {
+                    const isDone = currentStatusIndex >= index;
+                    const isCurrent = ticket.status === s;
+                    return (
+                      <div key={s} className="space-y-1.5">
+                        <div
+                          className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center text-xs font-semibold transition-colors ${
+                            isCurrent
+                              ? "bg-[#0071E3] text-white ring-4 ring-[#0071E3]/20 shadow-xs"
+                              : isDone
+                              ? "bg-[#EAF8EE] text-[#1B873F] border border-[#C3ECD1]"
+                              : "bg-[#F5F5F7] text-[#86868B] border border-black/[0.05]"
+                          }`}
+                        >
+                          {isDone ? <Check className="w-4 h-4" /> : index + 1}
+                        </div>
+                        <span className={`block text-[11px] truncate ${isCurrent ? "font-bold text-[#1D1D1F]" : "text-[#86868B]"}`}>
+                          {s.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </Card>
+
+            {/* Staff Resolution Evidence Photo Upload Zone */}
+            <Card>
+              <div className="p-5 pb-3 border-b border-black/[0.06] flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                    Resolution Evidence (Work Proof)
+                  </h2>
+                  <p className="text-xs text-[#86868B]">
+                    Upload photographic proof of completed repair before closing ticket
+                  </p>
+                </div>
+                {ticket.resolutionPhotoUrl && (
+                  <Badge variant="success" className="text-[10px]">
+                    Photo Verified
+                  </Badge>
+                )}
+              </div>
+
+              <div className="p-5 space-y-4">
+                {ticket.resolutionPhotoUrl ? (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-semibold text-[#1B873F] uppercase tracking-wider">
+                      Current Resolution Photo
+                    </span>
+                    <div
+                      onClick={() => setLightbox(ticket.resolutionPhotoUrl || null)}
+                      className="rounded-2xl overflow-hidden border border-[#C3ECD1] max-h-56 bg-black/5 cursor-pointer group relative"
+                    >
+                      <img src={ticket.resolutionPhotoUrl} alt="Staff resolution proof" className="w-full h-full object-cover group-hover:opacity-90 transition-opacity" />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-1.5">
+                        <ImageIcon className="w-4 h-4" />
+                        Click to Zoom Proof
+                      </div>
                     </div>
-                  )}
-                  {ticket.isDuplicate && ticket.parentTicketId && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-400 text-xs">🔗 Duplicate of:</span>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-black/15 p-6 text-center bg-[#FBFBFD] space-y-2">
+                    <Camera className="w-6 h-6 text-[#86868B] mx-auto" />
+                    <p className="text-xs font-medium text-[#1D1D1F]">No resolution photo uploaded yet</p>
+                    <p className="text-[11px] text-[#86868B]">
+                      Field staff should take a photo of the repaired equipment or facility
+                    </p>
+                  </div>
+                )}
+
+                <input
+                  ref={resolutionPhotoRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleResolutionPhotoChange}
+                  className="hidden"
+                />
+
+                {resolutionPhotoPreview && (
+                  <div className="space-y-3 p-3 bg-[#F5F5F7] rounded-2xl border border-black/[0.05]">
+                    <div className="relative rounded-xl overflow-hidden aspect-video max-h-48 border border-black/10">
+                      <img src={resolutionPhotoPreview} alt="Selected resolution proof" className="w-full h-full object-cover" />
                       <button
-                        onClick={() => navigate(`/admin/tickets/${ticket.parentTicketId}`)}
-                        className="font-mono text-blue-400 text-xs hover:text-blue-300 flex items-center gap-1"
+                        type="button"
+                        onClick={() => {
+                          setResolutionPhotoFile(null);
+                          setResolutionPhotoPreview(null);
+                        }}
+                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center"
                       >
-                        {ticket.parentTicketId} <ExternalLink className="h-3 w-3" />
+                        <X className="w-4 h-4" />
                       </button>
-                      {ticket.duplicateSimilarity && (
-                        <span className="text-slate-500 text-xs">({Math.round(ticket.duplicateSimilarity * 100)}% similar)</span>
-                      )}
                     </div>
-                  )}
-                  {ticket.linkedTicketIds && ticket.linkedTicketIds.length > 0 && (
-                    <div>
-                      <p className="text-slate-400 text-xs mb-1">Linked reports ({ticket.linkedTicketIds.length}):</p>
-                      <div className="flex flex-wrap gap-1">
-                        {ticket.linkedTicketIds.map((lid) => (
-                          <button key={lid} onClick={() => navigate(`/admin/tickets/${lid}`)} className="font-mono text-xs text-indigo-400 hover:text-indigo-300">
-                            {lid}
-                          </button>
+                    <Button
+                      type="button"
+                      disabled={photoUploading}
+                      onClick={handleUploadResolutionPhoto}
+                      className="w-full h-10 text-xs font-semibold rounded-xl"
+                    >
+                      {photoUploading ? "Uploading to Storage..." : "Save & Attach Evidence Photo"}
+                    </Button>
+                  </div>
+                )}
+
+                {!resolutionPhotoPreview && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => resolutionPhotoRef.current?.click()}
+                    className="w-full h-10 text-xs rounded-xl border-black/10 bg-white"
+                  >
+                    <Upload className="w-3.5 h-3.5 mr-1.5 text-[#0071E3]" />
+                    {ticket.resolutionPhotoUrl ? "Replace Resolution Photo" : "Upload Resolution Photo"}
+                  </Button>
+                )}
+
+                {photoUploadError && (
+                  <p className="text-xs text-[#FF3B30]">{photoUploadError}</p>
+                )}
+              </div>
+            </Card>
+
+            {/* AI Technician Assistant (Gemini Suggestion) */}
+            <Card>
+              <div className="p-5 pb-3 border-b border-black/[0.06] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-[#0071E3]/10 text-[#0071E3] flex items-center justify-center">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                      AI Resolution Advisor
+                    </h2>
+                    <p className="text-[10px] text-[#86868B]">
+                      Gemini maintenance diagnosis & recommended repair steps
+                    </p>
+                  </div>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAiSuggest}
+                  disabled={aiLoading}
+                  className="h-8 text-xs border-black/10 rounded-xl bg-white"
+                >
+                  {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Run AI Diagnosis"}
+                </Button>
+              </div>
+
+              <div className="p-5 space-y-3 text-xs">
+                {aiError && (
+                  <p className="text-[#FF3B30]">{aiError}</p>
+                )}
+
+                {aiSuggestion ? (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-[#F5F5F7] rounded-xl space-y-1">
+                      <span className="font-semibold text-[#1D1D1F]">Likely Root Cause:</span>
+                      <p className="text-[#6E6E73]">{aiSuggestion.likelyCause}</p>
+                    </div>
+
+                    <div className="p-3 bg-[#F5F5F7] rounded-xl space-y-1">
+                      <span className="font-semibold text-[#1D1D1F]">Recommended Action:</span>
+                      <p className="text-[#6E6E73]">{aiSuggestion.recommendedAction}</p>
+                      <button
+                        type="button"
+                        onClick={() => setResolutionSummary(aiSuggestion.recommendedAction)}
+                        className="text-[#0071E3] hover:underline font-medium text-[11px] pt-1 block"
+                      >
+                        Copy to Resolution Summary field ↓
+                      </button>
+                    </div>
+
+                    {aiSuggestion.resolutionSteps?.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="font-semibold text-[#1D1D1F]">Procedure Checklist:</span>
+                        <ul className="space-y-1 list-disc list-inside text-[#6E6E73]">
+                          {aiSuggestion.resolutionSteps.map((step, i) => (
+                            <li key={i}>{step}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {aiSuggestion.safetyNote && (
+                      <div className="p-3 bg-[#FFF8E6] border border-[#FFE7A8] rounded-xl text-[#B25E00]">
+                        <span className="font-semibold">Safety Protocol:</span> {aiSuggestion.safetyNote}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[#86868B] py-2">
+                    Click "Run AI Diagnosis" to analyze complaint symptoms and generate technical steps for field technicians.
+                  </p>
+                )}
+              </div>
+            </Card>
+
+            {/* Student Verification & Feedback */}
+            {ticket.studentVerified && (
+              <Card>
+                <div className="p-5 pb-3 border-b border-black/[0.06]">
+                  <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                    Student Verification Audit
+                  </h2>
+                </div>
+                <div className="p-5 space-y-3 text-xs">
+                  <div className="flex items-center gap-2 text-[#1B873F] font-semibold">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Student confirmed resolution at location</span>
+                  </div>
+
+                  {ticket.studentFeedbackRating && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#86868B]">Rating given:</span>
+                      <div className="flex items-center gap-0.5 text-[#FF9500]">
+                        {[...Array(ticket.studentFeedbackRating)].map((_, i) => (
+                          <Star key={i} className="w-3.5 h-3.5 fill-[#FF9500]" />
                         ))}
                       </div>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-            )}
 
-            {/* Anomaly Flags (advisory) */}
-            {(ticket.anomalyFlags?.length ?? 0) > 0 && (
-              <Card className="bg-purple-900/10 border-purple-500/30">
-                <CardHeader>
-                  <CardTitle className="text-purple-400 text-sm flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4" />
-                    Anomaly Flags (Advisory Only)
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <p className="text-xs text-slate-400">These are advisory flags only. The complaint should NOT be rejected solely based on these flags.</p>
-                  {ticket.anomalyFlags!.map((flag, i) => (
-                    <div key={i} className="rounded bg-purple-900/20 border border-purple-500/20 p-2">
-                      <p className="text-xs font-semibold text-purple-300">{flag.type.replace(/_/g, " ")}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{flag.detail}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Escalations */}
-            {(ticket.escalations?.length ?? 0) > 0 && (
-              <Card className="bg-orange-900/10 border-orange-500/30">
-                <CardHeader>
-                  <CardTitle className="text-orange-400 text-sm">Escalation History</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {ticket.escalations!.map((esc, i) => (
-                    <div key={i} className="rounded bg-orange-900/20 border border-orange-500/20 p-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${esc.level === 2 ? 'bg-red-900/50 text-red-400' : 'bg-orange-900/50 text-orange-400'}`}>
-                          Level {esc.level}
-                        </span>
-                        <span className="text-xs text-slate-400">→ {esc.notifiedTo}</span>
-                        <span className="text-xs text-slate-500 ml-auto">{new Date(esc.escalatedAt).toLocaleString()}</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1">{esc.reason}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* AI Analysis */}
-            {ticket.aiSummary && (
-              <Card className="bg-slate-900 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white flex items-center gap-2">
-                    <span>🤖 AI Analysis</span>
-                    {ticket.adminOverride && (
-                      <span className="text-xs bg-pink-900/50 text-pink-400 border border-pink-500/30 px-2 py-0.5 rounded-full">Admin Override Applied</span>
-                    )}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <div className="text-slate-300"><span className="font-medium text-slate-400">AI Summary:</span> {ticket.aiSummary}</div>
-                  {ticket.aiCategory && ticket.aiCategory !== ticket.category && (
-                    <div className="text-slate-300"><span className="font-medium text-slate-400">AI Category (original):</span> <span className="line-through text-slate-500">{ticket.aiCategory}</span> → <span className="text-pink-400">{ticket.category}</span></div>
-                  )}
-                  {ticket.aiSuggestedAction && (
-                    <div className="text-slate-300"><span className="font-medium text-slate-400">Suggested Action:</span> {ticket.aiSuggestedAction}</div>
-                  )}
-                  {typeof ticket.aiConfidence === "number" && (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-400">Confidence:</span>
-                      <span className={`text-sm font-bold ${ticket.aiConfidence >= 0.6 ? 'text-green-400' : 'text-yellow-400'}`}>
-                        {Math.round(ticket.aiConfidence * 100)}%
-                      </span>
-                      {ticket.aiConfidence < 0.6 && (
-                        <span className="text-xs text-yellow-400">⚠️ Low — manual review recommended</span>
-                      )}
-                    </div>
-                  )}
-                  {ticket.adminOverrideReason && (
-                    <div className="text-slate-300"><span className="font-medium text-slate-400">Override Reason:</span> {ticket.adminOverrideReason}</div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Student Feedback */}
-            {ticket.studentFeedbackRating && (
-              <Card className="bg-slate-900 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white text-sm">⭐ Student Feedback</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <div className="flex">
-                      {[1,2,3,4,5].map((s) => (
-                        <span key={s} className={s <= ticket.studentFeedbackRating! ? "text-yellow-400" : "text-slate-600"}>★</span>
-                      ))}
-                    </div>
-                    <span className="text-sm font-bold text-white">{ticket.studentFeedbackRating}/5</span>
-                    {ticket.studentVerifiedAt && (
-                      <span className="text-xs text-slate-500 ml-auto">{ticket.studentVerifiedAt?.toLocaleString()}</span>
-                    )}
-                  </div>
                   {ticket.studentFeedbackComment && (
-                    <p className="text-sm text-slate-300 italic">"{ticket.studentFeedbackComment}"</p>
+                    <div className="p-3 bg-[#F5F5F7] rounded-xl text-[#6E6E73]">
+                      "{ticket.studentFeedbackComment}"
+                    </div>
                   )}
-                </CardContent>
+                </div>
               </Card>
             )}
 
-            {/* Ticket Progress */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white">Ticket Progress</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-between overflow-x-auto">
-                  {STATUS_STEPS.map((step, idx) => (
-                    <div key={step} className="flex flex-1 items-center">
-                      <div className="flex flex-col items-center">
-                        <div
-                          className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-semibold ${
-                            idx <= currentStatusIndex
-                              ? "border-blue-500 bg-blue-500 text-white"
-                              : "border-slate-600 text-slate-500"
-                          }`}
-                        >
-                          {idx <= currentStatusIndex ? "✓" : idx + 1}
-                        </div>
-                        <span className="mt-1 text-[10px] text-slate-500 hidden sm:block text-center">{step.replace(/_/g, " ")}</span>
-                      </div>
-                      {idx < STATUS_STEPS.length - 1 && (
-                        <div
-                          className={`h-0.5 flex-1 mx-1 ${idx < currentStatusIndex ? "bg-blue-500" : "bg-slate-700"}`}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Activity Log */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white">Activity Log</CardTitle>
-              </CardHeader>
-              <CardContent>
+            {/* Activity History Log */}
+            <Card>
+              <div className="p-5 pb-3 border-b border-black/[0.06]">
+                <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                  Audit Log & Operational History
+                </h2>
+              </div>
+              <div className="p-5 space-y-3 text-xs">
                 {activities.length === 0 ? (
-                  <p className="text-sm text-slate-500">No activity yet.</p>
+                  <p className="text-[#86868B]">No activity events logged yet.</p>
                 ) : (
-                  <div className="space-y-2">
-                    {[...activities].reverse().map((a) => (
-                      <div key={a.id} className="flex items-start justify-between gap-3 text-sm py-2 border-b border-slate-800 last:border-0">
-                        <div className="flex items-start gap-2 min-w-0">
-                          <span className="flex-shrink-0 text-base">{activityIcon(a.type)}</span>
-                          <div className="min-w-0">
-                            <span className="text-slate-200 font-medium">{a.message}</span>
-                            {a.changedByName && (
-                              <span className="text-slate-500"> by {a.changedByName}</span>
-                            )}
-                          </div>
+                  activities.map((a, i) => (
+                    <div key={a.id || i} className="flex gap-3 items-start py-1 border-b border-black/[0.03] last:border-0">
+                      <div className="w-2 h-2 rounded-full bg-[#0071E3] mt-1.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-[#1D1D1F]">{a.message}</span>
+                          <span className="text-[11px] text-[#86868B]">
+                            {a.createdAt.toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+                            {a.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
                         </div>
-                        <span className="text-xs text-slate-600 whitespace-nowrap flex-shrink-0">
-                          {a.createdAt.toLocaleString()}
-                        </span>
+                        {a.changedByName && (
+                          <span className="text-[11px] text-[#86868B]">Recorded by {a.changedByName}</span>
+                        )}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))
                 )}
-              </CardContent>
+              </div>
             </Card>
           </div>
 
-          {/* Right Sidebar — Actions */}
+          {/* ─── Right Column (1 span): Management Panel ─── */}
           <div className="space-y-6">
-            {/* Tracking Link */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardContent className="p-4">
-                {ticket.trackingToken && (
-                  <div className="mb-4 rounded-md border border-slate-700 bg-slate-800/50 p-3">
-                    <p className="text-xs font-medium text-slate-400 mb-2">Student Tracking Link</p>
-                    <div className="flex items-center gap-2">
-                      <code className="text-xs flex-1 truncate text-slate-300">
-                        {`${(import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")}/track/${ticket.ticketId}/${ticket.trackingToken}`}
-                      </code>
-                      <button
-                        type="button"
-                        className="shrink-0 p-1 rounded hover:bg-slate-700 text-slate-400"
-                        title="Copy link"
-                        onClick={() => {
-                          const appUrl = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "");
-                          navigator.clipboard.writeText(`${appUrl}/track/${ticket.ticketId}/${ticket.trackingToken}`);
-                          setCopySuccess(true);
-                          setTimeout(() => setCopySuccess(false), 2000);
-                        }}
-                      >
-                        {copySuccess ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-                )}
+            <form onSubmit={handleSave} className="space-y-6">
+              {/* Operations Control Panel */}
+              <Card>
+                <div className="p-5 pb-3 border-b border-black/[0.06]">
+                  <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                    Operational Actions
+                  </h2>
+                </div>
 
-                <form onSubmit={handleSave} className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Status</label>
-                    <Select value={status} onValueChange={(v) => setStatus(v as TicketStatus)} disabled={saving}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
-                        <SelectValue placeholder="Select status" />
+                <div className="p-5 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Status Lifecycle
+                    </label>
+                    <Select value={status} onValueChange={(v) => setStatus(v as TicketStatus)}>
+                      <SelectTrigger className="h-10 text-xs">
+                        <SelectValue placeholder="Status" />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectContent>
                         {STATUSES.map((s) => (
-                          <SelectItem key={s} value={s} className="text-slate-200 focus:bg-slate-700">
+                          <SelectItem key={s} value={s}>
                             {s.replace(/_/g, " ")}
                           </SelectItem>
                         ))}
@@ -734,96 +847,25 @@ export default function AdminTicketDetail() {
                     </Select>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Priority
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(admin override)</span>
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Assigned Field Technician
                     </label>
-                    <Select value={priority} onValueChange={(v) => setPriority(v as TicketPriority)} disabled={saving}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
-                        <SelectValue placeholder="Select priority" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        {PRIORITIES.map((p) => (
-                          <SelectItem key={p} value={p} className="text-slate-200 focus:bg-slate-700">{p}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Severity</label>
-                    <Select value={severity} onValueChange={(v) => setSeverity(v as TicketSeverity)} disabled={saving}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
-                        <SelectValue placeholder="Select severity" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        {SEVERITIES.map((s) => (
-                          <SelectItem key={s} value={s} className="text-slate-200 focus:bg-slate-700">{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Category
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(admin override)</span>
-                    </label>
-                    <Select value={category} onValueChange={setCategory} disabled={saving}>
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        {CAMPUS_CATEGORIES.map((c) => (
-                          <SelectItem key={c} value={c} className="text-slate-200 focus:bg-slate-700">{c}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Department</label>
-                    <input
-                      value={department}
-                      onChange={(e) => setDepartment(e.target.value)}
-                      placeholder="e.g. Electrical Department"
-                      disabled={saving}
-                      className="flex h-9 w-full rounded-md border border-slate-700 bg-slate-800 text-slate-200 px-3 py-1 text-sm"
-                    />
-                  </div>
-
-                  {(category !== ticket.category || priority !== ticket.priority) && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-yellow-400">
-                        ⚠️ Override Reason <span className="text-red-400">*</span>
-                      </label>
-                      <input
-                        value={adminOverrideReason}
-                        onChange={(e) => setAdminOverrideReason(e.target.value)}
-                        placeholder="Reason for overriding AI classification..."
-                        required
-                        className="flex h-9 w-full rounded-md border border-yellow-500/30 bg-slate-800 text-slate-200 px-3 py-1 text-sm"
-                      />
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Assigned To</label>
                     <Select
                       value={assignedTo}
-                      onValueChange={(v) => {
-                        setAssignedTo(v);
-                        const found = users.find((u) => u.id === v);
-                        setAssignedToName(found?.email || "");
+                      onValueChange={(val) => {
+                        setAssignedTo(val);
+                        const found = users.find((u) => u.id === val);
+                        setAssignedToName(found?.email || val);
                       }}
-                      disabled={saving}
                     >
-                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-200">
-                        <SelectValue placeholder="Select staff" />
+                      <SelectTrigger className="h-10 text-xs">
+                        <SelectValue placeholder="Assign technician" />
                       </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        <SelectItem value="" className="text-slate-400 focus:bg-slate-700">Unassigned</SelectItem>
+                      <SelectContent>
+                        <SelectItem value="">Unassigned</SelectItem>
                         {users.map((u) => (
-                          <SelectItem key={u.id} value={u.id} className="text-slate-200 focus:bg-slate-700">
+                          <SelectItem key={u.id} value={u.id}>
                             {u.email || u.id}
                           </SelectItem>
                         ))}
@@ -831,181 +873,178 @@ export default function AdminTicketDetail() {
                     </Select>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Current Activity
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(shown to student)</span>
-                    </label>
-                    <Textarea
-                      value={currentActivity}
-                      onChange={(e) => setCurrentActivity(e.target.value)}
-                      placeholder="e.g. Our electrician is inspecting the reported issue."
-                      disabled={saving}
-                      rows={2}
-                      className="bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Estimated Resolution
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(range in mins, e.g. 20-30)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={estimatedResolutionMins}
-                      onChange={(e) => setEstimatedResolutionMins(e.target.value)}
-                      placeholder={ticket ? getEstimateString(ticket.priority, ticket.severity, (status || ticket.status) as TicketStatus) : "20-30"}
-                      disabled={saving}
-                      className="flex h-9 w-full rounded-md border border-slate-700 bg-slate-800 text-slate-200 px-3 py-1 text-sm"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Resolution Notes
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(internal)</span>
-                    </label>
-                    <Textarea
-                      value={resolutionNotes}
-                      onChange={(e) => setResolutionNotes(e.target.value)}
-                      placeholder="Internal notes about resolution steps..."
-                      disabled={saving}
-                      rows={3}
-                      className="bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-300">Resolution Summary
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">(shown to student)</span>
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Resolution Summary
                     </label>
                     <Textarea
                       value={resolutionSummary}
                       onChange={(e) => setResolutionSummary(e.target.value)}
-                      placeholder="Public-facing resolution summary..."
-                      disabled={saving}
-                      rows={3}
-                      className="bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500"
+                      placeholder="Brief note on what was repaired..."
+                      className="text-xs min-h-[70px]"
                     />
                   </div>
 
-                  <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={saving}>
-                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Internal Notes
+                    </label>
+                    <Textarea
+                      value={resolutionNotes}
+                      onChange={(e) => setResolutionNotes(e.target.value)}
+                      placeholder="Private notes for staff..."
+                      className="text-xs min-h-[70px]"
+                    />
+                  </div>
+
+                  <Button
+                    type="submit"
+                    disabled={saving}
+                    className="w-full h-11 text-xs font-semibold rounded-xl shadow-[0_1px_3px_rgba(0,113,227,0.3)]"
+                  >
+                    {saving ? "Saving Changes..." : "Save & Update Ticket"}
                   </Button>
-                </form>
-              </CardContent>
-            </Card>
+                </div>
+              </Card>
 
-            {/* Resolution Evidence Upload */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white text-sm">📷 Resolution Evidence Photo</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-xs text-slate-400">Upload a photo showing the issue has been resolved. This will be shown to the student for verification.</p>
-                {ticket.resolutionPhotoUrl ? (
-                  <div className="space-y-2">
-                    <img src={ticket.resolutionPhotoUrl} alt="Resolution evidence" className="w-full rounded-md max-h-32 object-cover border border-green-500/30" />
-                    <p className="text-xs text-green-400">✅ Evidence photo uploaded</p>
-                    <input
-                      ref={resolutionPhotoRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      onChange={handleResolutionPhotoChange}
-                      className="text-xs text-slate-400"
-                    />
-                  </div>
-                ) : (
-                  <input
-                    ref={resolutionPhotoRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleResolutionPhotoChange}
-                    className="w-full text-xs text-slate-400 border border-slate-700 rounded p-2 bg-slate-800"
-                  />
-                )}
-                {resolutionPhotoPreview && (
-                  <div className="space-y-2">
-                    <img src={resolutionPhotoPreview} alt="Preview" className="w-full rounded-md max-h-32 object-cover" />
-                    <Button
-                      type="button"
-                      className="w-full bg-green-700 hover:bg-green-600 text-xs"
-                      onClick={handleUploadResolutionPhoto}
-                      disabled={photoUploading}
-                    >
-                      {photoUploading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Uploading...</> : <><Upload className="h-3 w-3 mr-1" />Upload Evidence</>}
-                    </Button>
-                  </div>
-                )}
-                {photoUploadError && <p className="text-xs text-red-400">{photoUploadError}</p>}
-              </CardContent>
-            </Card>
+              {/* Administrative Override Panel */}
+              <Card>
+                <div className="p-5 pb-3 border-b border-black/[0.06]">
+                  <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                    Triage & Priority Override
+                  </h2>
+                  <p className="text-[10px] text-[#86868B]">
+                    Adjust AI classification with audited reason
+                  </p>
+                </div>
 
-            {/* AI Resolution Assistant */}
-            <Card className="bg-slate-900 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white text-sm">🤖 AI Resolution Assistant</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full border-slate-600 text-slate-300"
-                  onClick={handleAiSuggest}
-                  disabled={aiLoading}
-                >
-                  {aiLoading ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analyzing...</>
-                  ) : (
-                    <><Sparkles className="mr-2 h-4 w-4" />Generate Resolution Suggestion</>
-                  )}
-                </Button>
-                {aiError && (
-                  <div className="rounded-md border border-red-500/30 bg-red-900/20 p-3 text-xs text-red-400">{aiError}</div>
-                )}
-                {aiSuggestion && (
-                  <div className="space-y-3 rounded-md border border-slate-700 bg-slate-800/50 p-4">
-                    <div className="text-sm space-y-2 text-slate-300">
-                      <div><span className="font-medium text-slate-400">Likely Cause:</span> {aiSuggestion.likelyCause}</div>
-                      <div><span className="font-medium text-slate-400">Recommended Action:</span> {aiSuggestion.recommendedAction}</div>
-                      <div><span className="font-medium text-slate-400">Required Team:</span> {aiSuggestion.requiredTeam}</div>
-                      <div><span className="font-medium text-slate-400">Resolution Steps:</span>
-                        <ul className="list-disc pl-4 mt-1 space-y-1 text-xs">
-                          {aiSuggestion.resolutionSteps.map((step, i) => (
-                            <li key={i}>{step}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      {aiSuggestion.safetyNote && (
-                        <div className="bg-yellow-900/20 border border-yellow-500/20 rounded p-2">
-                          <span className="font-medium text-yellow-400">⚠️ Safety:</span> <span className="text-xs">{aiSuggestion.safetyNote}</span>
-                        </div>
-                      )}
+                <div className="p-5 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Priority SLA
+                    </label>
+                    <Select value={priority} onValueChange={(v) => setPriority(v as TicketPriority)}>
+                      <SelectTrigger className="h-10 text-xs">
+                        <SelectValue placeholder="Priority" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((p) => (
+                          <SelectItem key={p} value={p}>
+                            {p}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                      Category
+                    </label>
+                    <Select value={category} onValueChange={setCategory}>
+                      <SelectTrigger className="h-10 text-xs">
+                        <SelectValue placeholder="Category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CAMPUS_CATEGORIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {(category !== ticket.category || priority !== ticket.priority) && (
+                    <div className="space-y-1.5 pt-1">
+                      <label className="text-[11px] font-semibold uppercase tracking-wider text-[#D70015]">
+                        Override Justification Reason *
+                      </label>
+                      <Input
+                        value={adminOverrideReason}
+                        onChange={(e) => setAdminOverrideReason(e.target.value)}
+                        placeholder="Why is AI classification being overridden?"
+                        className="h-10 text-xs border-[#FF3B30]/30"
+                      />
                     </div>
-                    <Button type="button" size="sm" className="w-full bg-blue-600 hover:bg-blue-700 text-xs" onClick={useSuggestedAction}>
-                      Use Suggested Action
-                    </Button>
+                  )}
+                </div>
+              </Card>
+            </form>
+
+            {/* AI Decision Intelligence */}
+            <Card>
+              <div className="p-5 pb-3 border-b border-black/[0.06]">
+                <h2 className="text-sm font-semibold text-[#1D1D1F]">
+                  Routing Intelligence
+                </h2>
+              </div>
+              <div className="p-5 space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#6E6E73]">Decision Mode</span>
+                  <Badge variant={ticket.routingDecision === "AUTO" ? "success" : "warning"} className="text-[10px]">
+                    {ticket.routingDecision || "MANUAL_REVIEW"}
+                  </Badge>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-[#6E6E73]">AI Confidence</span>
+                  <span className="font-semibold text-[#1D1D1F]">
+                    {Math.round((ticket.aiConfidence || 0) * 100)}%
+                  </span>
+                </div>
+
+                {ticket.routingReason && (
+                  <div className="p-3 bg-[#F5F5F7] rounded-xl text-[#6E6E73]">
+                    {ticket.routingReason}
                   </div>
                 )}
-              </CardContent>
+              </div>
             </Card>
+
+            {/* Advisory Anomaly Flags */}
+            {(ticket.anomalyFlags?.length ?? 0) > 0 && (
+              <Card>
+                <div className="p-5 pb-3 border-b border-black/[0.06]">
+                  <h2 className="text-sm font-semibold text-[#D70015]">
+                    Advisory Anomaly Indicators
+                  </h2>
+                </div>
+                <div className="p-5 space-y-2 text-xs">
+                  {ticket.anomalyFlags?.map((flag, idx) => (
+                    <div key={idx} className="p-3 bg-[#FEECEC] border border-[#FF3B30]/20 rounded-xl space-y-1">
+                      <span className="font-semibold text-[#D70015]">{flag.type}</span>
+                      <p className="text-[#6E6E73]">{flag.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
           </div>
         </div>
+      </main>
 
-        {/* Lightbox */}
-        {lightbox && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onClick={() => setLightbox(null)}>
-            <div className="relative max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
-              <img src={lightbox} alt="Enlarged photo" className="max-h-[90vh] max-w-[90vw] rounded-md object-contain" />
-              <button
-                className="absolute -top-10 right-0 text-white hover:text-slate-300 p-2"
-                onClick={() => setLightbox(null)}
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+      {/* Lightbox Modal */}
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 cursor-pointer"
+        >
+          <div className="relative max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden bg-black">
+            <img src={lightbox} alt="Enlarged evidence" className="w-full h-full object-contain" />
+            <button
+              onClick={() => setLightbox(null)}
+              className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      <footer className="text-center text-xs text-[#86868B] py-6 border-t border-black/[0.06] bg-white">
+        Campus Pulse • Operations Console • Ticket Investigation Workbench
+      </footer>
     </div>
   );
 }

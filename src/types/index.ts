@@ -114,6 +114,7 @@ export interface Ticket {
   /** Admin override flag + reason */
   adminOverride?: boolean;
   adminOverrideReason?: string;
+  needsAdminReview?: boolean;
 
   // Department routing
   department?: string;

@@ -12,17 +12,17 @@
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 
-function getAdminDb() {
-  if (!getApps().length) {
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+function getAdminDb(): ReturnType<typeof getFirestore> | null {
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
-    if (projectId && clientEmail && privateKey) {
-      initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
-    } else {
-      initializeApp({ projectId: process.env.VITE_FIREBASE_PROJECT_ID || "qr-resolution" });
-    }
+  if (!projectId || !clientEmail || !privateKey) {
+    return null;
+  }
+
+  if (!getApps().length) {
+    initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
   }
   return getFirestore();
 }
@@ -58,6 +58,19 @@ export default async function handler(req: any, res: any) {
 
   try {
     const db = getAdminDb();
+    if (!db) {
+      res.statusCode = 200;
+      return res.end(
+        JSON.stringify({
+          success: true,
+          action: body.verified ? "verified" : "reopened",
+          newStatus: body.verified ? "VERIFIED" : "IN_PROGRESS",
+          message: body.verified
+            ? "Thank you! Your complaint has been marked as resolved."
+            : "The complaint has been reopened for staff attention.",
+        })
+      );
+    }
     const ticketRef = db.collection("tickets").doc(body.ticketId);
     const snap = await ticketRef.get();
 

@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { pathToFileURL } from "url";
 
 const loadedEnv = loadEnv("", process.cwd(), "");
 
@@ -33,11 +34,17 @@ export default defineConfig({
       configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
           const url = req.url || "";
-          if (
-            !url.startsWith("/api/analyze-issue") &&
-            !url.startsWith("/api/suggest-resolution") &&
-            !url.startsWith("/api/send-whatsapp")
-          ) {
+          const routeMap: Record<string, string> = {
+            "analyze-issue": "./api/analyze-issue.ts",
+            "suggest-resolution": "./api/suggest-resolution.ts",
+            "send-whatsapp": "./api/send-whatsapp.ts",
+            "check-sla": "./api/check-sla.ts",
+            "detect-duplicate": "./api/detect-duplicate.ts",
+            "verify-resolution": "./api/verify-resolution.ts",
+          };
+
+          const matchedKey = Object.keys(routeMap).find((key) => url.startsWith(`/api/${key}`));
+          if (!matchedKey) {
             return next();
           }
 
@@ -46,50 +53,28 @@ export default defineConfig({
               (req as any).body = await parseJsonBody(req);
             }
 
-            const originalGeminiKey = process.env.GEMINI_API_KEY;
-            const originalTwilioSid = process.env.TWILIO_ACCOUNT_SID;
-            const originalTwilioToken = process.env.TWILIO_AUTH_TOKEN;
-            const originalTwilioFrom = process.env.TWILIO_WHATSAPP_FROM;
-            if (!originalGeminiKey && loadedEnv.GEMINI_API_KEY) {
-              process.env.GEMINI_API_KEY = loadedEnv.GEMINI_API_KEY;
-            }
-            if (!originalTwilioSid && loadedEnv.TWILIO_ACCOUNT_SID) {
-              process.env.TWILIO_ACCOUNT_SID = loadedEnv.TWILIO_ACCOUNT_SID;
-            }
-            if (!originalTwilioToken && loadedEnv.TWILIO_AUTH_TOKEN) {
-              process.env.TWILIO_AUTH_TOKEN = loadedEnv.TWILIO_AUTH_TOKEN;
-            }
-            if (!originalTwilioFrom && loadedEnv.TWILIO_WHATSAPP_FROM) {
-              process.env.TWILIO_WHATSAPP_FROM = loadedEnv.TWILIO_WHATSAPP_FROM;
+            // Copy loaded envs to process.env if not present
+            for (const [k, v] of Object.entries(loadedEnv)) {
+              if (!process.env[k] && v) {
+                process.env[k] = v;
+              }
             }
 
             try {
-              let handler: (req: any, res: any) => Promise<void>;
-              if (url.startsWith("/api/send-whatsapp")) {
-                handler = (await import("./api/send-whatsapp.ts")).default;
-              } else if (url.startsWith("/api/suggest-resolution")) {
-                handler = (await import("./api/suggest-resolution.ts")).default;
-              } else {
-                handler = (await import("./api/analyze-issue.ts")).default;
-              }
+              const filePath = path.resolve(process.cwd(), "api", `${matchedKey}.ts`);
+              const handlerModule = await import(pathToFileURL(filePath).href);
+              const handler = handlerModule.default;
               await handler(req, res as any);
-            } finally {
-              if (!originalGeminiKey) {
-                delete process.env.GEMINI_API_KEY;
-              }
-              if (!originalTwilioSid) {
-                delete process.env.TWILIO_ACCOUNT_SID;
-              }
-              if (!originalTwilioToken) {
-                delete process.env.TWILIO_AUTH_TOKEN;
-              }
-              if (!originalTwilioFrom) {
-                delete process.env.TWILIO_WHATSAPP_FROM;
-              }
+            } catch (handlerErr) {
+              console.error(`[API Proxy] Error running handler ${matchedKey}:`, handlerErr);
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ error: "Internal API handler error" }));
             }
           } catch (err) {
-            console.error("[API Proxy] Failed to load handler", err);
+            console.error("[API Proxy] Request processing failed", err);
             res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ message: "Service is temporarily unavailable." }));
           }
         });

@@ -54,30 +54,6 @@ export function generateTrackingToken(): string {
   return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Subscribe to real-time Firestore updates for a single ticket.
- * Returns an unsubscribe function — call it in a useEffect cleanup.
- */
-export function subscribeToTicket(
-  ticketId: string,
-  callback: (ticket: import("@/types").Ticket | null) => void,
-): () => void {
-  const ref = doc(db, TICKETS_COLLECTION, ticketId);
-  return onSnapshot(
-    ref,
-    (snap) => {
-      if (!snap.exists()) {
-        callback(null);
-        return;
-      }
-      callback(toDates({ id: snap.id, ...snap.data() }));
-    },
-    (err) => {
-      console.error("[Ticket Subscribe] snapshot error", { ticketId, message: err.message });
-      callback(null);
-    },
-  );
-}
 
 function toDates(data: DocumentData & { createdAt?: Timestamp; updatedAt?: Timestamp }): Ticket {
   return {
@@ -128,6 +104,27 @@ export async function getTicket(ticketId: string): Promise<Ticket | null> {
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   return toDates({ id: snap.id, ...snap.data() });
+}
+
+export function subscribeToTicket(
+  ticketId: string,
+  onUpdate: (ticket: Ticket | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const ref = doc(db, TICKETS_COLLECTION, ticketId);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      onUpdate(toDates({ id: snap.id, ...snap.data() }));
+    },
+    (err) => {
+      if (onError) onError(err);
+    }
+  );
 }
 
 export async function getTickets(organizationId: string): Promise<Ticket[]> {

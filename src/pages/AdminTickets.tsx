@@ -1,29 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { getTickets } from "@/services/ticketService";
+import { getOrganization } from "@/services/organizationService";
 import { getLocation } from "@/services/locationService";
 import { getLocationPath } from "@/lib/utils/locationPath";
-import { getOrganization } from "@/services/organizationService";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, ArrowUpDown } from "lucide-react";
 import type { Ticket, TicketStatus, TicketPriority } from "@/types";
-
-const CATEGORIES = [
-  "Electrical",
-  "Plumbing",
-  "Cleaning",
-  "Furniture",
-  "HVAC",
-  "Network",
-  "Safety",
-  "Infrastructure",
-  "Other",
-] as const;
+import {
+  Search,
+  ArrowUpDown,
+  RefreshCw,
+  LogOut,
+  Activity,
+  X,
+} from "lucide-react";
 
 const STATUSES: TicketStatus[] = [
   "OPEN",
@@ -31,31 +25,43 @@ const STATUSES: TicketStatus[] = [
   "ASSIGNED",
   "IN_PROGRESS",
   "RESOLVED",
+  "VERIFIED",
   "CLOSED",
+  "REOPENED",
 ];
 
 const PRIORITIES: TicketPriority[] = ["P1", "P2", "P3", "P4"];
 
-const priorityColors: Record<TicketPriority, "destructive" | "warning" | "secondary" | "outline"> = {
-  P1: "destructive",
-  P2: "warning",
-  P3: "secondary",
-  P4: "outline",
+const CATEGORIES = [
+  "Electrical",
+  "Plumbing",
+  "Cleaning",
+  "Civil",
+  "Hostel",
+  "Laboratory",
+  "Other",
+];
+
+const priorityConfig: Record<TicketPriority, { label: string; variant: "destructive" | "warning" | "secondary" | "outline" }> = {
+  P1: { label: "P1 Critical", variant: "destructive" },
+  P2: { label: "P2 High", variant: "warning" },
+  P3: { label: "P3 Medium", variant: "secondary" },
+  P4: { label: "P4 Low", variant: "outline" },
 };
 
-const statusColors: Record<TicketStatus, "default" | "secondary" | "success" | "warning" | "outline"> = {
-  OPEN: "outline",
-  TRIAGED: "secondary",
-  ASSIGNED: "warning",
-  IN_PROGRESS: "default",
-  RESOLVED: "success",
-  VERIFIED: "success",
-  CLOSED: "secondary",
-  REOPENED: "warning",
+const statusConfig: Record<TicketStatus, { variant: "default" | "secondary" | "success" | "warning" | "destructive" | "outline" }> = {
+  OPEN: { variant: "default" },
+  TRIAGED: { variant: "secondary" },
+  ASSIGNED: { variant: "warning" },
+  IN_PROGRESS: { variant: "warning" },
+  RESOLVED: { variant: "success" },
+  VERIFIED: { variant: "success" },
+  CLOSED: { variant: "secondary" },
+  REOPENED: { variant: "destructive" },
 };
 
 export default function AdminTickets() {
-  const { user, authLoading } = useAuth();
+  const { user, authLoading, logout } = useAuth();
   const navigate = useNavigate();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,38 +80,39 @@ export default function AdminTickets() {
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const org = await getOrganization("default");
-        if (!org) {
-          setTickets([]);
-          return;
-        }
-        const data = await getTickets(org.id);
-        setTickets(data);
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const org = await getOrganization("default");
+      if (!org) {
+        setTickets([]);
+        return;
+      }
+      const data = await getTickets(org.id);
+      setTickets(data);
 
-        const cache: Record<string, string> = {};
-        for (const t of data) {
-          if (!cache[t.locationId]) {
-            try {
-              const loc = await getLocation(t.locationId);
-              if (loc) cache[t.locationId] = getLocationPath([loc], loc.id);
-            } catch {
-              cache[t.locationId] = t.locationId;
-            }
+      const cache: Record<string, string> = {};
+      for (const t of data) {
+        if (!cache[t.locationId]) {
+          try {
+            const loc = await getLocation(t.locationId);
+            if (loc) cache[t.locationId] = getLocationPath([loc], loc.id);
+          } catch {
+            cache[t.locationId] = t.locationId;
           }
         }
-        setLocationCache(cache);
-      } catch {
-        setError("Failed to load tickets.");
-      } finally {
-        setLoading(false);
       }
+      setLocationCache(cache);
+    } catch {
+      setError("Failed to load campus tickets.");
+    } finally {
+      setLoading(false);
     }
-    load();
+  };
+
+  useEffect(() => {
+    if (user) loadData();
   }, [user]);
 
   const filtered = useMemo(() => {
@@ -119,9 +126,11 @@ export default function AdminTickets() {
           t.title,
           t.description,
           t.category,
-          t.reportedArea || "",
-          locationCache[t.locationId] || t.locationId,
+          t.reportedArea,
+          t.department,
+          locationCache[t.locationId],
         ]
+          .filter(Boolean)
           .join(" ")
           .toLowerCase();
         return haystack.includes(q);
@@ -133,7 +142,12 @@ export default function AdminTickets() {
     }
 
     if (priorityFilter !== "ALL") {
-      result = result.filter((t) => t.priority === priorityFilter);
+      if (priorityFilter.includes(",")) {
+        const allowed = priorityFilter.split(",");
+        result = result.filter((t) => allowed.includes(t.priority));
+      } else {
+        result = result.filter((t) => t.priority === priorityFilter);
+      }
     }
 
     if (categoryFilter !== "ALL") {
@@ -149,7 +163,7 @@ export default function AdminTickets() {
       RESOLVED: 4,
       VERIFIED: 5,
       CLOSED: 6,
-      REOPENED: 3,
+      REOPENED: 0,
     };
 
     result.sort((a, b) => {
@@ -167,291 +181,322 @@ export default function AdminTickets() {
     return result;
   }, [tickets, search, statusFilter, priorityFilter, categoryFilter, sortField, sortDir, locationCache]);
 
-  const stats = useMemo(() => {
-    const total = tickets.length;
-    const open = tickets.filter((t) => t.status === "OPEN").length;
-    const triaged = tickets.filter((t) => t.status === "TRIAGED").length;
-    const assigned = tickets.filter((t) => t.status === "ASSIGNED").length;
-    const inProgress = tickets.filter((t) => t.status === "IN_PROGRESS").length;
-    const highCritical = tickets.filter((t) => t.priority === "P1" || t.priority === "P2").length;
-    const resolved = tickets.filter((t) => t.status === "RESOLVED" || t.status === "CLOSED").length;
-    return { total, open, triaged, assigned, inProgress, highCritical, resolved };
-  }, [tickets]);
-
   const toggleSort = (field: "createdAt" | "priority" | "status") => {
     if (sortField === field) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
     } else {
       setSortField(field);
       setSortDir("desc");
     }
   };
 
-  if (authLoading || !user) {
-    return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)]">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Tickets</h1>
-          <p className="text-muted-foreground">Manage reported issues.</p>
+    <div className="min-h-screen bg-[#FBFBFD] text-[#1D1D1F] flex flex-col selection:bg-[#0071E3]/15 selection:text-[#0071E3]">
+      {/* ─── Apple Operations Navigation Bar ─── */}
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/85 border-b border-black/[0.06]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <Link to="/admin" className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-[#0071E3] flex items-center justify-center text-white shadow-xs">
+                <Activity className="w-4 h-4" />
+              </div>
+              <span className="font-semibold text-base tracking-tight text-[#1D1D1F]">
+                Campus Pulse
+              </span>
+            </Link>
+
+            <nav className="hidden md:flex items-center gap-1 text-xs font-medium">
+              <Link
+                to="/admin"
+                className="px-3 py-1.5 rounded-lg text-[#6E6E73] hover:text-[#1D1D1F] hover:bg-black/[0.03] transition-colors"
+              >
+                Overview
+              </Link>
+              <Link
+                to="/admin/tickets"
+                className="px-3 py-1.5 rounded-lg bg-black/[0.05] text-[#1D1D1F]"
+              >
+                Tickets
+              </Link>
+              <Link
+                to="/admin/locations"
+                className="px-3 py-1.5 rounded-lg text-[#6E6E73] hover:text-[#1D1D1F] hover:bg-black/[0.03] transition-colors"
+              >
+                Locations
+              </Link>
+              <Link
+                to="/admin/qr"
+                className="px-3 py-1.5 rounded-lg text-[#6E6E73] hover:text-[#1D1D1F] hover:bg-black/[0.03] transition-colors"
+              >
+                QR Codes
+              </Link>
+              <Link
+                to="/admin/organization"
+                className="px-3 py-1.5 rounded-lg text-[#6E6E73] hover:text-[#1D1D1F] hover:bg-black/[0.03] transition-colors"
+              >
+                Settings
+              </Link>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadData}
+              disabled={loading}
+              className="h-9 px-3 text-xs rounded-xl border-black/10 flex items-center gap-1.5 bg-white"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-[#6E6E73] ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={logout}
+              className="h-9 px-2.5 text-xs text-[#6E6E73] hover:text-[#D70015] rounded-xl"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="grid gap-4 mt-6 sm:grid-cols-2 lg:grid-cols-7">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Tickets</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Open</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">{stats.open}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Triaged</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">{stats.triaged}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Assigned</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">{stats.assigned}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">In Progress</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-yellow-600">{stats.inProgress}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">High / Critical</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">{stats.highCritical}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Resolved / Closed</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">{stats.resolved}</div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* ─── Main Content ─── */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+        {/* Page Title & Stats Ribbon */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-[#1D1D1F]">
+              Ticket Operations
+            </h1>
+            <p className="text-xs text-[#86868B] mt-0.5">
+              Live campus maintenance issues, assignments, and resolution audits.
+            </p>
+          </div>
 
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Search & Filters</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-4 lg:flex-row">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-[#86868B]">
+              Showing <span className="font-semibold text-[#1D1D1F]">{filtered.length}</span> of {tickets.length} tickets
+            </span>
+          </div>
+        </div>
+
+        {/* ─── Search & Filters Bar (iOS Toolbar) ─── */}
+        <div className="bg-white border border-black/[0.08] rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-3">
+          <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-[#86868B]" />
               <Input
-                placeholder="Search tickets..."
+                placeholder="Search by ticket ID, title, facility, department..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pl-8"
+                className="pl-10 h-11 text-xs"
               />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-3.5 top-3.5 text-[#86868B] hover:text-[#1D1D1F]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full lg:w-48">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Statuses</SelectItem>
-                {STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {s.replace(/_/g, " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-              <SelectTrigger className="w-full lg:w-32">
-                <SelectValue placeholder="Priority" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All</SelectItem>
-                {PRIORITIES.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full lg:w-48">
-                <SelectValue placeholder="Category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Categories</SelectItem>
-                {CATEGORIES.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
 
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>
-            {filtered.length} {filtered.length === 1 ? "Ticket" : "Tickets"}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && (
-            <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive mb-4">
-              {error}
+            <div className="flex flex-wrap gap-2.5">
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[140px] h-11 text-xs">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Statuses</SelectItem>
+                  {STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s.replace(/_/g, " ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+                <SelectTrigger className="w-[120px] h-11 text-xs">
+                  <SelectValue placeholder="Priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Priority</SelectItem>
+                  {PRIORITIES.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-[140px] h-11 text-xs">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Categories</SelectItem>
+                  {CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        </div>
+
+        {/* ─── Ticket List Table (Desktop) & Cards (Mobile) ─── */}
+        {error && (
+          <div className="rounded-2xl border border-[#FF3B30]/20 bg-[#FEECEC] p-4 text-xs text-[#D70015]">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="bg-white border border-black/[0.08] rounded-2xl p-12 text-center">
+            <RefreshCw className="w-6 h-6 animate-spin text-[#0071E3] mx-auto" />
+            <p className="text-xs text-[#86868B] mt-2 font-medium">Loading tickets...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-white border border-black/[0.08] rounded-2xl p-12 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] text-[#86868B] mx-auto flex items-center justify-center">
+              <Search className="w-5 h-5" />
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No tickets match your filters.</div>
-          ) : (
-            <>
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="py-3 px-2 cursor-pointer" onClick={() => toggleSort("createdAt")}>
-                        <div className="flex items-center gap-1">
-                          Ticket ID <ArrowUpDown className="h-3 w-3" />
-                        </div>
-                      </th>
-                      <th className="py-3 px-2">Title</th>
-                      <th className="py-3 px-2">Category</th>
-                      <th className="py-3 px-2">Location</th>
-                      <th className="py-3 px-2">Assigned</th>
-                      <th className="py-3 px-2 cursor-pointer" onClick={() => toggleSort("priority")}>
-                        <div className="flex items-center gap-1">
-                          Priority <ArrowUpDown className="h-3 w-3" />
-                        </div>
-                      </th>
-                      <th className="py-3 px-2">Severity</th>
-                      <th className="py-3 px-2 cursor-pointer" onClick={() => toggleSort("status")}>
-                        <div className="flex items-center gap-1">
-                          Status <ArrowUpDown className="h-3 w-3" />
-                        </div>
-                      </th>
-                      <th className="py-3 px-2">Updated</th>
-                      <th className="py-3 px-2">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((ticket) => (
-                      <tr key={ticket.id} className="border-b last:border-0 hover:bg-muted/50">
-                        <td className="py-3 px-2 font-mono">{ticket.ticketId}</td>
-                        <td className="py-3 px-2 max-w-xs truncate">{ticket.title}</td>
-                        <td className="py-3 px-2">{ticket.category}</td>
-                        <td className="py-3 px-2 max-w-[150px] truncate">
-                          {locationCache[ticket.locationId] || ticket.locationId}
-                        </td>
-                        <td className="py-3 px-2 max-w-[120px] truncate">
-                          {ticket.assignedToName || ticket.assignedTo || <span className="text-muted-foreground">-</span>}
-                        </td>
-                        <td className="py-3 px-2">
-                          <Badge variant={priorityColors[ticket.priority]}>{ticket.priority}</Badge>
-                        </td>
-                        <td className="py-3 px-2">{ticket.severity}</td>
-                        <td className="py-3 px-2">
-                          <Badge variant={statusColors[ticket.status]} className="capitalize">
-                            {ticket.status.replace(/_/g, " ")}
-                          </Badge>
-                        </td>
-                        <td className="py-3 px-2">{ticket.updatedAt.toLocaleDateString()}</td>
-                        <td className="py-3 px-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/admin/tickets/${ticket.id}`)}
-                          >
-                            View
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="md:hidden space-y-3">
-                {filtered.map((ticket) => (
-                  <Card key={ticket.id} className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-mono text-sm font-semibold">{ticket.ticketId}</div>
-                        <div className="text-sm mt-1 truncate">{ticket.title}</div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-[#1D1D1F]">No Matching Tickets</h3>
+              <p className="text-xs text-[#6E6E73]">
+                Try adjusting your search criteria or resetting filters.
+              </p>
+            </div>
+            {(search || statusFilter !== "ALL" || priorityFilter !== "ALL" || categoryFilter !== "ALL") && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-9 rounded-xl"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("ALL");
+                  setPriorityFilter("ALL");
+                  setCategoryFilter("ALL");
+                }}
+              >
+                Reset All Filters
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="bg-white border border-black/[0.08] rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-[#FAFAFC] border-b border-black/[0.06] text-[#86868B] font-semibold uppercase tracking-wider">
+                    <th className="py-3 px-4 cursor-pointer" onClick={() => toggleSort("createdAt")}>
+                      <div className="flex items-center gap-1.5">
+                        Ticket Ref <ArrowUpDown className="w-3 h-3" />
                       </div>
-                      <Badge variant={priorityColors[ticket.priority]} className="shrink-0">
-                        {ticket.priority}
-                      </Badge>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>{ticket.category}</span>
-                      <span>•</span>
-                      <span className="truncate max-w-[120px]">
-                        {locationCache[ticket.locationId] || ticket.locationId}
-                      </span>
-                      <span>•</span>
-                      <span>{ticket.updatedAt.toLocaleDateString()}</span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant={statusColors[ticket.status]} className="capitalize text-xs">
-                          {ticket.status.replace(/_/g, " ")}
+                    </th>
+                    <th className="py-3 px-4">Subject & Description</th>
+                    <th className="py-3 px-4">Facility / Location</th>
+                    <th className="py-3 px-4 cursor-pointer" onClick={() => toggleSort("priority")}>
+                      <div className="flex items-center gap-1.5">
+                        Priority <ArrowUpDown className="w-3 h-3" />
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 cursor-pointer" onClick={() => toggleSort("status")}>
+                      <div className="flex items-center gap-1.5">
+                        Status <ArrowUpDown className="w-3 h-3" />
+                      </div>
+                    </th>
+                    <th className="py-3 px-4">Reported</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-black/[0.04]">
+                  {filtered.map((t) => (
+                    <tr
+                      key={t.id}
+                      onClick={() => navigate(`/admin/tickets/${t.id}`)}
+                      className="hover:bg-[#F5F5F7]/80 transition-colors cursor-pointer group"
+                    >
+                      <td className="py-3.5 px-4 font-mono font-bold text-[#1D1D1F]">
+                        {t.ticketId}
+                      </td>
+
+                      <td className="py-3.5 px-4 max-w-xs">
+                        <div className="font-semibold text-[#1D1D1F] truncate group-hover:text-[#0071E3] transition-colors">
+                          {t.title}
+                        </div>
+                        <div className="text-[#86868B] truncate mt-0.5">
+                          {t.description}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-[#6E6E73] max-w-[180px]">
+                        <div className="truncate font-medium text-[#1D1D1F]">
+                          {locationCache[t.locationId] || t.reportedArea || t.qrId}
+                        </div>
+                        <div className="text-[11px] text-[#86868B] truncate">
+                          {t.department || "Operations"}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <Badge
+                          variant={priorityConfig[t.priority]?.variant || "secondary"}
+                          className="text-[10px] px-2 py-0.5"
+                        >
+                          {priorityConfig[t.priority]?.label || t.priority}
                         </Badge>
-                        {ticket.assignedToName && (
-                          <span className="text-xs text-muted-foreground truncate max-w-[100px]">
-                            {ticket.assignedToName}
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <Badge
+                          variant={statusConfig[t.status]?.variant || "outline"}
+                          className="text-[10px] px-2 py-0.5"
+                        >
+                          {t.status.replace(/_/g, " ")}
+                        </Badge>
+                        {t.slaBreached && !["RESOLVED", "VERIFIED", "CLOSED"].includes(t.status) && (
+                          <span className="block text-[10px] text-[#D70015] font-semibold mt-0.5">
+                            SLA Breached
                           </span>
                         )}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate(`/admin/tickets/${ticket.id}`)}
-                      >
-                        View
-                      </Button>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-[#86868B]">
+                        {t.createdAt.toLocaleDateString([], { month: "short", day: "numeric" })}
+                        <span className="block text-[11px] text-[#86868B]">
+                          {t.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2.5 text-xs text-[#0071E3] rounded-lg group-hover:bg-white transition-colors"
+                        >
+                          Details →
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </main>
+
+      <footer className="text-center text-xs text-[#86868B] py-6 border-t border-black/[0.06] bg-white">
+        Campus Pulse • Operations Console • Ticket Management
+      </footer>
     </div>
   );
 }

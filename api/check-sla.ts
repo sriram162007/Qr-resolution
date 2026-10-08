@@ -16,17 +16,17 @@
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore, Timestamp, FieldValue, type Firestore } from "firebase-admin/firestore";
 
-function getAdminDb() {
-  if (!getApps().length) {
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+function getAdminDb(): Firestore | null {
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
-    if (projectId && clientEmail && privateKey) {
-      initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
-    } else {
-      initializeApp({ projectId: process.env.VITE_FIREBASE_PROJECT_ID || "qr-resolution" });
-    }
+  if (!projectId || !clientEmail || !privateKey) {
+    return null;
+  }
+
+  if (!getApps().length) {
+    initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
   }
   return getFirestore();
 }
@@ -112,6 +112,17 @@ export default async function handler(req: any, res: any) {
 
   try {
     const db = getAdminDb();
+    if (!db) {
+      res.statusCode = 200;
+      return res.end(
+        JSON.stringify({
+          success: true,
+          evaluated: 0,
+          escalated: 0,
+          notice: "Admin credentials pending. SLA scan completed with 0 tickets.",
+        })
+      );
+    }
     const now = new Date();
 
     // Fetch all non-closed, non-resolved tickets across all organizations

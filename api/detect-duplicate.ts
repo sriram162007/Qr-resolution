@@ -15,20 +15,19 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 
 // ─── Firebase Admin Init ──────────────────────────────────────────────────────
 
-function getAdminDb() {
-  if (!getApps().length) {
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+function getAdminDb(): ReturnType<typeof getFirestore> | null {
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
-    if (projectId && clientEmail && privateKey) {
-      initializeApp({
-        credential: cert({ projectId, clientEmail, privateKey }),
-      });
-    } else {
-      // Fallback: unauthenticated (only works for publicly readable Firestore rules)
-      initializeApp({ projectId: process.env.VITE_FIREBASE_PROJECT_ID || "qr-resolution" });
-    }
+  if (!projectId || !clientEmail || !privateKey) {
+    return null;
+  }
+
+  if (!getApps().length) {
+    initializeApp({
+      credential: cert({ projectId, clientEmail, privateKey }),
+    });
   }
   return getFirestore();
 }
@@ -157,6 +156,16 @@ export default async function handler(req: any, res: any) {
 
   try {
     const db = getAdminDb();
+    if (!db) {
+      res.statusCode = 200;
+      return res.end(
+        JSON.stringify({
+          isDuplicate: false,
+          threshold,
+          reason: "Database scan offline or admin credentials not configured",
+        })
+      );
+    }
     const cutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000);
 
     // Fetch open/in-progress tickets for the same QR location
