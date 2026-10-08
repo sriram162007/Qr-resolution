@@ -49,7 +49,9 @@ const statusColors: Record<TicketStatus, "default" | "secondary" | "success" | "
   ASSIGNED: "warning",
   IN_PROGRESS: "default",
   RESOLVED: "success",
+  VERIFIED: "success",
   CLOSED: "secondary",
+  REOPENED: "warning",
 };
 
 export default function AdminTickets() {
@@ -145,7 +147,9 @@ export default function AdminTickets() {
       ASSIGNED: 2,
       IN_PROGRESS: 3,
       RESOLVED: 4,
-      CLOSED: 5,
+      VERIFIED: 5,
+      CLOSED: 6,
+      REOPENED: 3,
     };
 
     result.sort((a, b) => {

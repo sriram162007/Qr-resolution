@@ -32,7 +32,9 @@ const STATUS_REMAINING_FACTOR: Record<TicketStatus, number> = {
   ASSIGNED: 0.75,
   IN_PROGRESS: 0.5,
   RESOLVED: 0,
+  VERIFIED: 0,
   CLOSED: 0,
+  REOPENED: 0.6,
 };
 
 /**

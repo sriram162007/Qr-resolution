@@ -3,7 +3,7 @@ import twilio from "twilio";
 type WhatsAppRequest = {
   phoneNumber: string;
   ticketId: string;
-  type: "created" | "updated" | "status_changed";
+  type: "created" | "updated" | "status_changed" | "escalated" | "verified" | "reopened";
   title?: string;
   category?: string;
   priority?: string;
@@ -15,6 +15,9 @@ type WhatsAppRequest = {
   trackingUrl?: string;
   resolvedInMins?: number;
   currentActivity?: string;
+  // Escalation-specific
+  escalationLevel?: number;
+  ageMinutes?: number;
 };
 
 function maskRecipient(phoneNumber: string): string {
@@ -37,21 +40,35 @@ function normalizePhoneNumber(value: string): string | null {
   if (digits.startsWith("+")) {
     const num = digits.slice(1);
     if (/^\d{7,15}$/.test(num)) {
+      // Additional Indian number validation: +91 numbers must be 10 digits starting with 6-9
+      if (num.startsWith("91") && num.length === 12) {
+        const mobile = num.slice(2);
+        if (!/^[6-9]\d{9}$/.test(mobile)) {
+          console.warn("[WhatsApp API] Invalid Indian mobile number format");
+          // Still allow — other country codes are valid
+        }
+      }
       return `+${num}`;
     }
     return null;
   }
 
+  // 91XXXXXXXXXX (12 digits, no +)
   if (digits.startsWith("91") && digits.length === 12) {
-    return `+${digits}`;
+    const mobile = digits.slice(2);
+    if (/^[6-9]\d{9}$/.test(mobile)) return `+${digits}`;
+    return null;
   }
 
-  if (digits.length === 10) {
+  // 10-digit Indian mobile
+  if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
     return `+91${digits}`;
   }
 
+  // 0XXXXXXXXXX format
   if (digits.startsWith("0") && digits.length === 11) {
-    return `+91${digits.slice(1)}`;
+    const mobile = digits.slice(1);
+    if (/^[6-9]\d{9}$/.test(mobile)) return `+91${mobile}`;
   }
 
   return null;
@@ -86,14 +103,58 @@ function buildBody(body: Partial<WhatsAppRequest>): string {
       `🎫 *Complaint Registered*`,
       ``,
       `Ticket: *${ticketId}*`,
-      body.category ? `📂 ${body.category}` : "",
+      body.category ? `📂 Category: ${body.category}` : "",
       body.priority ? `🔴 Priority: ${body.priority}` : "",
       ``,
-      `🤖 AI analysis is in progress.`,
+      `🤖 Your complaint is being analyzed and routed to the right team.`,
     ];
     if (estimate) lines.push(``, estimate);
     if (trackLink) lines.push(``, trackLink);
+    lines.push(``, `You can track your complaint anytime using the link above.`);
     return lines.filter((l) => l !== undefined).join("\n");
+  }
+
+  // ── ESCALATED ───────────────────────────────────────────────────────────
+  if (body.type === "escalated") {
+    const levelStr = body.escalationLevel === 2 ? "Admin Office" : "Department Supervisor";
+    const ageStr = body.ageMinutes != null
+      ? `⏱️ Waiting for: ${body.ageMinutes >= 60 ? `${Math.floor(body.ageMinutes / 60)}h ${body.ageMinutes % 60}m` : `${body.ageMinutes} mins`}`
+      : "";
+    const lines: string[] = [
+      `⚠️ *Complaint Escalated*`,
+      ``,
+      `Ticket *${ticketId}* has been escalated to the *${levelStr}* as it has exceeded the expected resolution time.`,
+      ageStr,
+      body.priority ? `Priority: ${body.priority}` : "",
+    ];
+    if (trackLink) lines.push(``, trackLink);
+    lines.push(``, `We apologize for the delay. Our team is working to resolve this urgently.`);
+    return lines.filter((l) => l !== undefined).join("\n");
+  }
+
+  // ── VERIFIED / CLOSED ───────────────────────────────────────────────────
+  if (body.type === "verified") {
+    const lines: string[] = [
+      `✅ *Issue Verified & Closed*`,
+      ``,
+      `Thank you for confirming! Ticket *${ticketId}* has been successfully closed.`,
+      ``,
+      `We appreciate your feedback and hope the issue was resolved to your satisfaction.`,
+      `⭐ Your feedback helps us improve our services.`,
+    ];
+    return lines.join("\n");
+  }
+
+  // ── REOPENED ────────────────────────────────────────────────────────────
+  if (body.type === "reopened") {
+    const lines: string[] = [
+      `🔄 *Complaint Reopened*`,
+      ``,
+      `We're sorry to hear your issue wasn't resolved.`,
+      `Ticket *${ticketId}* has been reopened and assigned back to our team for urgent attention.`,
+    ];
+    if (trackLink) lines.push(``, trackLink);
+    return lines.join("\n");
   }
 
   // ── RESOLVED ────────────────────────────────────────────────────────────

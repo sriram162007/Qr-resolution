@@ -41,6 +41,29 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// ─── Star Rating Component ────────────────────────────────────────────────────
+function StarRating({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [hovered, setHovered] = useState(0);
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          key={star}
+          type="button"
+          onMouseEnter={() => setHovered(star)}
+          onMouseLeave={() => setHovered(0)}
+          onClick={() => onChange(star)}
+          className={`text-2xl transition-transform hover:scale-110 ${
+            (hovered || value) >= star ? "text-yellow-400" : "text-slate-600"
+          }`}
+        >
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function PublicTrack() {
   const { ticketId, token } = useParams<{ ticketId: string; token?: string }>();
   const [ticket, setTicket] = useState<Ticket | null>(null);
@@ -51,14 +74,24 @@ export default function PublicTrack() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
 
-  // Load activities once (they don't need realtime for this page)
+  // Verification state
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyDone, setVerifyDone] = useState<"confirmed" | "reopened" | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // Feedback state (shown after verification)
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackDone, setFeedbackDone] = useState(false);
+
+  // Load activities once
   useEffect(() => {
     if (!ticketId) return;
     getTicketActivities(ticketId)
       .then((acts) => {
-        // Show only customer-visible activity types
         const visible = acts.filter((a) =>
-          ["created", "status", "assignment", "activity_update"].includes(a.type),
+          ["created", "status", "assignment", "activity_update", "verification", "reopened", "escalation"].includes(a.type),
         );
         setActivities(visible.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()));
       })
@@ -68,7 +101,6 @@ export default function PublicTrack() {
   // Firestore realtime subscription
   useEffect(() => {
     if (!ticketId) return;
-
     setLoading(true);
     const unsub = subscribeToTicket(ticketId, async (data) => {
       if (!data) {
@@ -77,14 +109,12 @@ export default function PublicTrack() {
         return;
       }
 
-      // Token validation — if a token was provided in the URL, verify it
       if (token && data.trackingToken && data.trackingToken !== token) {
         setTokenError(true);
         setLoading(false);
         return;
       }
 
-      // Load location name on first load
       if (!locationName) {
         try {
           const loc = await getLocation(data.locationId);
@@ -107,6 +137,57 @@ export default function PublicTrack() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticketId, token]);
 
+  const handleVerify = async (verified: boolean) => {
+    if (!ticket || !token) return;
+    setVerifyLoading(true);
+    setVerifyError(null);
+    try {
+      const response = await fetch("/api/verify-resolution", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticketId: ticket.id,
+          trackingToken: token,
+          verified,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setVerifyError(data.message || "Verification failed. Please try again.");
+      } else {
+        setVerifyDone(verified ? "confirmed" : "reopened");
+      }
+    } catch {
+      setVerifyError("Network error. Please check your connection and try again.");
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleFeedbackSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ticket || !token || feedbackRating === 0) return;
+    setFeedbackSubmitting(true);
+    try {
+      await fetch("/api/verify-resolution", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticketId: ticket.id,
+          trackingToken: token,
+          verified: true,
+          rating: feedbackRating,
+          comment: feedbackComment.trim() || undefined,
+        }),
+      });
+      setFeedbackDone(true);
+    } catch {
+      // Non-critical
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  };
+
   // ─── Loading ─────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -127,8 +208,7 @@ export default function PublicTrack() {
           <div className="text-5xl">🔒</div>
           <h1 className="text-white text-xl font-bold">Invalid Tracking Link</h1>
           <p className="text-slate-400 text-sm">
-            This tracking link is invalid or has expired. Please use the link
-            from your original WhatsApp confirmation message.
+            This tracking link is invalid or has expired. Please use the link from your original WhatsApp confirmation message.
           </p>
         </div>
       </div>
@@ -160,15 +240,16 @@ export default function PublicTrack() {
   const nextStep = getNextStep(ticket.status);
   const progress = getProgressPercent(ticket.status);
   const estimateLabel = getEstimateLabel(ticket.status);
-  const isResolved = ticket.status === "RESOLVED" || ticket.status === "CLOSED";
+  const isResolved = ticket.status === "RESOLVED";
+  const isVerifiedOrClosed = ticket.status === "VERIFIED" || ticket.status === "CLOSED";
+  const isEscalated = (ticket.escalations?.length ?? 0) > 0;
 
-  const estimateValue = isResolved
+  const estimateValue = (isResolved || isVerifiedOrClosed)
     ? ticket.resolvedInMins != null
       ? `Resolved in ${formatResolvedIn(ticket.resolvedInMins)}`
       : "Resolved"
     : getEstimateString(ticket.priority, ticket.severity, ticket.status, ticket.estimatedResolutionMins);
 
-  // Build a timeline merging TRACKING_STEPS with activity timestamps
   const activityByStatus: Record<string, TicketActivity | undefined> = {};
   for (const act of activities) {
     if (act.type === "created") activityByStatus["OPEN"] = act;
@@ -197,7 +278,20 @@ export default function PublicTrack() {
           )}
           <span className="text-slate-600">·</span>
           <span className="text-slate-300 text-xs">{PRIORITY_LABELS[ticket.priority] ?? ticket.priority}</span>
+          {isEscalated && (
+            <>
+              <span className="text-slate-600">·</span>
+              <span className="text-orange-400 text-xs font-semibold">⚠️ Escalated</span>
+            </>
+          )}
         </div>
+
+        {/* Duplicate badge */}
+        {ticket.isDuplicate && ticket.parentTicketId && (
+          <div className="mt-2 text-xs text-yellow-400 bg-yellow-900/20 rounded-full px-3 py-1 inline-block">
+            🔗 Linked to <span className="font-mono font-bold">{ticket.parentTicketId}</span>
+          </div>
+        )}
       </div>
 
       <div className="px-4 pb-8 max-w-md mx-auto space-y-4">
@@ -218,7 +312,6 @@ export default function PublicTrack() {
 
           <p className="text-slate-300 text-sm leading-relaxed">{activity}</p>
 
-          {/* Estimate */}
           {estimateValue && (
             <div className="flex items-center justify-between pt-2 border-t border-white/10">
               <div>
@@ -235,6 +328,113 @@ export default function PublicTrack() {
           )}
         </div>
 
+        {/* ─── Student Verification Section ─── */}
+        {isResolved && token && !verifyDone && !ticket.studentVerified && (
+          <div className="rounded-2xl bg-green-900/20 border border-green-500/40 p-5 space-y-4">
+            <div>
+              <p className="text-green-400 font-semibold text-sm">✅ Your issue has been marked as resolved</p>
+              <p className="text-slate-300 text-xs mt-1 leading-relaxed">
+                Please verify: has the issue actually been resolved at your location?
+              </p>
+            </div>
+            {ticket.resolutionSummary && (
+              <div className="bg-green-900/30 rounded-xl p-3 text-xs text-slate-300">
+                <p className="text-green-400 font-medium mb-1">Resolution summary:</p>
+                <p>{ticket.resolutionSummary}</p>
+              </div>
+            )}
+            {ticket.resolutionPhotoUrl && (
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">Resolution evidence photo:</p>
+                <img
+                  src={ticket.resolutionPhotoUrl}
+                  alt="Resolution evidence"
+                  className="w-full rounded-xl object-cover max-h-48 border border-slate-700"
+                />
+              </div>
+            )}
+            {verifyError && (
+              <p className="text-xs text-red-400">{verifyError}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                disabled={verifyLoading}
+                onClick={() => handleVerify(true)}
+                className="flex-1 py-3 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold text-sm transition-colors disabled:opacity-50"
+              >
+                {verifyLoading ? "..." : "✅ Yes, Resolved!"}
+              </button>
+              <button
+                type="button"
+                disabled={verifyLoading}
+                onClick={() => handleVerify(false)}
+                className="flex-1 py-3 rounded-xl bg-red-800/50 hover:bg-red-700/50 text-red-300 font-semibold text-sm border border-red-500/30 transition-colors disabled:opacity-50"
+              >
+                {verifyLoading ? "..." : "❌ Not Resolved"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Verification Success / Reopen Confirmation ─── */}
+        {verifyDone === "confirmed" && (
+          <div className="rounded-2xl bg-green-900/30 border border-green-500/40 p-5 space-y-4">
+            <p className="text-green-400 font-semibold text-center">🎉 Thank you for confirming!</p>
+            <p className="text-slate-300 text-xs text-center">Your ticket has been marked as verified and closed.</p>
+
+            {!feedbackDone && (
+              <form onSubmit={handleFeedbackSubmit} className="space-y-3">
+                <p className="text-slate-400 text-xs text-center">Help us improve — rate your experience:</p>
+                <div className="flex justify-center">
+                  <StarRating value={feedbackRating} onChange={setFeedbackRating} />
+                </div>
+                {feedbackRating > 0 && (
+                  <>
+                    <textarea
+                      value={feedbackComment}
+                      onChange={(e) => setFeedbackComment(e.target.value)}
+                      placeholder="Optional: Any comments about the resolution?"
+                      rows={2}
+                      className="w-full rounded-xl bg-slate-800 border border-slate-600 text-slate-300 text-xs px-3 py-2 placeholder:text-slate-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={feedbackSubmitting}
+                      className="w-full py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      {feedbackSubmitting ? "Submitting..." : "Submit Feedback"}
+                    </button>
+                  </>
+                )}
+              </form>
+            )}
+            {feedbackDone && (
+              <p className="text-center text-green-400 text-sm">⭐ Feedback submitted! Thank you.</p>
+            )}
+          </div>
+        )}
+
+        {verifyDone === "reopened" && (
+          <div className="rounded-2xl bg-orange-900/20 border border-orange-500/30 p-5 space-y-2">
+            <p className="text-orange-400 font-semibold">🔄 Ticket Reopened</p>
+            <p className="text-slate-300 text-xs leading-relaxed">
+              We're sorry the issue wasn't resolved. Your complaint has been reopened and our team has been notified urgently.
+            </p>
+          </div>
+        )}
+
+        {/* ─── Already verified ─── */}
+        {isVerifiedOrClosed && (
+          <div className="rounded-2xl bg-green-900/20 border border-green-500/30 p-4 space-y-2">
+            <p className="text-green-400 font-semibold text-sm">🎉 Complaint Closed</p>
+            <p className="text-slate-300 text-xs">
+              This complaint was verified and closed.
+              {ticket.studentFeedbackRating && ` You rated this ${ticket.studentFeedbackRating}/5 stars.`}
+            </p>
+          </div>
+        )}
+
         {/* ─── Progress Bar ─── */}
         <div className="rounded-2xl bg-slate-800/60 border border-slate-700/50 p-5 space-y-3">
           <div className="flex items-center justify-between mb-1">
@@ -248,7 +448,6 @@ export default function PublicTrack() {
             />
           </div>
 
-          {/* Step dots */}
           <div className="flex items-center justify-between mt-3">
             {TRACKING_STEPS.map((step, idx) => {
               const done = idx < statusIdx;
@@ -280,7 +479,7 @@ export default function PublicTrack() {
         </div>
 
         {/* ─── What Happens Next ─── */}
-        {nextStep && !isResolved && (
+        {nextStep && !isResolved && !isVerifiedOrClosed && (
           <div className="rounded-2xl bg-slate-800/60 border border-slate-700/50 p-4">
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
               What happens next?
@@ -289,11 +488,33 @@ export default function PublicTrack() {
           </div>
         )}
 
-        {/* ─── Resolution Summary (if resolved) ─── */}
-        {isResolved && ticket.resolutionSummary && (
+        {/* ─── Escalation Notice ─── */}
+        {isEscalated && (
+          <div className="rounded-2xl bg-orange-900/20 border border-orange-500/30 p-4">
+            <p className="text-xs font-semibold text-orange-400 uppercase tracking-wide mb-1">Escalation Notice</p>
+            <p className="text-slate-300 text-xs leading-relaxed">
+              This complaint has been escalated to senior management for urgent attention. We apologize for the delay.
+            </p>
+          </div>
+        )}
+
+        {/* ─── Resolution Summary ─── */}
+        {(isResolved || isVerifiedOrClosed) && ticket.resolutionSummary && (
           <div className="rounded-2xl bg-green-900/30 border border-green-500/30 p-4 space-y-1">
             <p className="text-xs font-semibold text-green-400 uppercase tracking-wide">Resolution</p>
             <p className="text-slate-200 text-sm leading-relaxed">{ticket.resolutionSummary}</p>
+          </div>
+        )}
+
+        {/* ─── Resolution Evidence Photo ─── */}
+        {(isResolved || isVerifiedOrClosed) && ticket.resolutionPhotoUrl && (
+          <div className="rounded-2xl bg-slate-800/60 border border-slate-700/50 p-4 space-y-2">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Resolution Evidence</p>
+            <img
+              src={ticket.resolutionPhotoUrl}
+              alt="Resolution evidence photo"
+              className="w-full rounded-xl object-cover max-h-56 border border-slate-700"
+            />
           </div>
         )}
 
@@ -317,7 +538,6 @@ export default function PublicTrack() {
 
               return (
                 <div key={step.status} className="flex gap-3">
-                  {/* Dot + line */}
                   <div className="flex flex-col items-center">
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0 border-2 ${
@@ -338,7 +558,6 @@ export default function PublicTrack() {
                     )}
                   </div>
 
-                  {/* Content */}
                   <div className={`pb-5 min-w-0 flex-1 ${isLast ? "" : ""}`}>
                     <div className="flex items-baseline justify-between gap-2">
                       <p
@@ -380,7 +599,7 @@ export default function PublicTrack() {
         {/* ─── Footer ─── */}
         <div className="text-center pt-2 pb-4">
           <p className="text-slate-600 text-xs">
-            Powered by <span className="text-slate-500 font-semibold">QR Resolution</span>
+            Powered by <span className="text-slate-500 font-semibold">AI Campus Complaint System</span>
           </p>
           <p className="text-slate-700 text-[10px] mt-1 font-mono">{ticket.ticketId}</p>
         </div>

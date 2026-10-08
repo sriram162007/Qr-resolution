@@ -1,17 +1,36 @@
 import { db } from "@/lib/firebase";
-import { doc, setDoc, getDoc, getDocs, updateDoc, onSnapshot, serverTimestamp, query, where, collection, orderBy, type DocumentData, type Timestamp } from "firebase/firestore";
-import type { Ticket, TicketActivity } from "@/types";
+import {
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  updateDoc,
+  onSnapshot,
+  serverTimestamp,
+  query,
+  where,
+  collection,
+  orderBy,
+  addDoc,
+  arrayUnion,
+  type DocumentData,
+  type Timestamp,
+} from "firebase/firestore";
+import type { Ticket, TicketActivity, SLAConfig } from "@/types";
 
 const TICKETS_COLLECTION = "tickets";
 const ACTIVITY_COLLECTION = "activity";
+const SLA_COLLECTION = "sla_configs";
 
 export const ALLOWED_TRANSITIONS: Record<Ticket["status"], Ticket["status"][]> = {
-  OPEN: ["TRIAGED"],
-  TRIAGED: ["ASSIGNED"],
+  OPEN: ["TRIAGED", "ASSIGNED"],
+  TRIAGED: ["ASSIGNED", "IN_PROGRESS"],
   ASSIGNED: ["IN_PROGRESS"],
   IN_PROGRESS: ["RESOLVED"],
-  RESOLVED: ["CLOSED", "IN_PROGRESS"],
+  RESOLVED: ["VERIFIED", "IN_PROGRESS"],
+  VERIFIED: ["CLOSED"],
   CLOSED: [],
+  REOPENED: ["ASSIGNED", "IN_PROGRESS"],
 };
 
 export function canTransition(from: Ticket["status"], to: Ticket["status"]): boolean {
@@ -19,7 +38,10 @@ export function canTransition(from: Ticket["status"], to: Ticket["status"]): boo
 }
 
 export function generateTicketId(): string {
-  return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  const prefix = "TKT";
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 5).toUpperCase();
+  return `${prefix}-${timestamp}-${random}`;
 }
 
 /**
@@ -64,6 +86,7 @@ function toDates(data: DocumentData & { createdAt?: Timestamp; updatedAt?: Times
     updatedAt: data.updatedAt?.toDate?.() ?? new Date(),
     resolvedAt: data.resolvedAt?.toDate?.(),
     closedAt: data.closedAt?.toDate?.(),
+    studentVerifiedAt: data.studentVerifiedAt?.toDate?.(),
   } as Ticket;
 }
 
@@ -137,7 +160,7 @@ export async function updateTicketStatus(ticketId: string, status: Ticket["statu
   if (status === "RESOLVED") {
     updates.resolvedAt = serverTimestamp();
   }
-  if (status === "CLOSED") {
+  if (status === "CLOSED" || status === "VERIFIED") {
     updates.closedAt = serverTimestamp();
   }
   if (actor?.id) updates.lastUpdatedBy = actor.id;
@@ -151,12 +174,19 @@ export async function updateTicketDetail(ticketId: string, data: {
   status?: Ticket["status"];
   priority?: Ticket["priority"];
   severity?: Ticket["severity"];
+  category?: string;
+  department?: string;
   assignedTo?: string;
   assignedToName?: string;
   resolutionNotes?: string;
   resolutionSummary?: string;
+  resolutionPhotoUrl?: string;
   currentActivity?: string;
   estimatedResolutionMins?: string;
+  adminOverride?: boolean;
+  adminOverrideReason?: string;
+  routingDecision?: Ticket["routingDecision"];
+  routingReason?: string;
 }, actor?: { id?: string; name?: string }): Promise<void> {
   const current = await getTicket(ticketId);
   if (!current) throw new Error("Ticket not found");
@@ -171,19 +201,20 @@ export async function updateTicketDetail(ticketId: string, data: {
   const updates: Record<string, unknown> = { ...cleanData, updatedAt: serverTimestamp() };
   if (data.status === "RESOLVED") {
     updates.resolvedAt = serverTimestamp();
-    // Compute actual resolution time in minutes from ticket creation
     if (current.createdAt) {
       const mins = Math.round((Date.now() - current.createdAt.getTime()) / 60000);
       updates.resolvedInMins = Math.max(mins, 1);
     }
   }
-  if (data.status === "CLOSED") {
+  if (data.status === "CLOSED" || data.status === "VERIFIED") {
     updates.closedAt = serverTimestamp();
   }
   if (actor?.id) updates.lastUpdatedBy = actor.id;
   if (actor?.name) updates.lastUpdatedByName = actor?.name;
   const ref = doc(db, TICKETS_COLLECTION, ticketId);
   await updateDoc(ref, updates);
+
+  // Activity log entries
   if (data.status && data.status !== current.status) {
     await addActivity(ticketId, "status", `Status changed to ${data.status}`, actor?.id, actor?.name);
   }
@@ -193,22 +224,57 @@ export async function updateTicketDetail(ticketId: string, data: {
   if (data.resolutionNotes !== undefined && data.resolutionNotes !== current.resolutionNotes) {
     await addActivity(ticketId, "resolution", "Resolution notes updated", actor?.id, actor?.name);
   }
+  if (data.resolutionPhotoUrl !== undefined && data.resolutionPhotoUrl !== current.resolutionPhotoUrl) {
+    await addActivity(ticketId, "evidence", "Resolution evidence photo uploaded", actor?.id, actor?.name);
+  }
   if (data.currentActivity !== undefined && data.currentActivity !== current.currentActivity) {
     await addActivity(ticketId, "activity_update", `Activity updated: ${data.currentActivity}`, actor?.id, actor?.name);
   }
+  if (data.category !== undefined && data.category !== current.category) {
+    await addActivity(ticketId, "ai_override", `Category overridden: ${current.category} → ${data.category} (${data.adminOverrideReason || "admin override"})`, actor?.id, actor?.name);
+  }
+  if (data.priority !== undefined && data.priority !== current.priority) {
+    await addActivity(ticketId, "priority_override", `Priority changed: ${current.priority} → ${data.priority}`, actor?.id, actor?.name);
+  }
+  if (data.routingDecision) {
+    await addActivity(ticketId, "routing", `Routing: ${data.routingDecision} — ${data.routingReason || ""}`, actor?.id, actor?.name);
+  }
+}
+
+/** Link a duplicate report to its parent ticket */
+export async function linkDuplicateTicket(childTicketId: string, parentTicketId: string, similarity: number): Promise<void> {
+  const [childRef, parentRef] = [
+    doc(db, TICKETS_COLLECTION, childTicketId),
+    doc(db, TICKETS_COLLECTION, parentTicketId),
+  ];
+  await updateDoc(childRef, {
+    isDuplicate: true,
+    parentTicketId,
+    duplicateSimilarity: similarity,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(parentRef, {
+    linkedTicketIds: arrayUnion(childTicketId),
+    updatedAt: serverTimestamp(),
+  });
+  await addActivity(childTicketId, "duplicate", `Linked as duplicate of ${parentTicketId} (similarity: ${Math.round(similarity * 100)}%)`, "system", "Duplicate Detector");
+  await addActivity(parentTicketId, "duplicate_link", `Duplicate report linked: ${childTicketId}`, "system", "Duplicate Detector");
 }
 
 export async function addActivity(ticketId: string, type: string, message: string, changedBy?: string, changedByName?: string): Promise<void> {
-  const activityRef = doc(collection(db, TICKETS_COLLECTION, ticketId, ACTIVITY_COLLECTION));
+  const activityRef = collection(db, TICKETS_COLLECTION, ticketId, ACTIVITY_COLLECTION);
   const payload = Object.fromEntries(
     Object.entries({ ticketId, type, message, changedBy, changedByName, createdAt: serverTimestamp() })
       .filter(([, value]) => value !== undefined)
   );
-  await setDoc(activityRef, payload);
+  await addDoc(activityRef, payload);
 }
 
 export async function getTicketActivities(ticketId: string): Promise<TicketActivity[]> {
-  const q = query(collection(db, TICKETS_COLLECTION, ticketId, ACTIVITY_COLLECTION));
+  const q = query(
+    collection(db, TICKETS_COLLECTION, ticketId, ACTIVITY_COLLECTION),
+    orderBy("createdAt", "asc"),
+  );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
     const data = d.data() as DocumentData & { createdAt?: Timestamp };
@@ -224,9 +290,9 @@ export async function getTicketActivities(ticketId: string): Promise<TicketActiv
   });
 }
 
-export async function getUsers(): Promise<Array<{ id: string; email: string | null }>> {
+export async function getUsers(): Promise<Array<{ id: string; email: string | null; role?: string }>> {
   const snap = await getDocs(collection(db, "users"));
-  return snap.docs.map((d) => ({ id: d.id, email: d.data().email ?? null }));
+  return snap.docs.map((d) => ({ id: d.id, email: d.data().email ?? null, role: d.data().role }));
 }
 
 export async function setTicketStatus(ticketId: string, status: Ticket["status"]): Promise<void> {
@@ -235,4 +301,39 @@ export async function setTicketStatus(ticketId: string, status: Ticket["status"]
 
 export async function setTicketAssignment(ticketId: string, assignedTo: string | undefined): Promise<void> {
   return updateTicket(ticketId, { assignedTo });
+}
+
+// ─── SLA Config ───────────────────────────────────────────────────────────────
+
+export async function getSLAConfigs(organizationId: string): Promise<SLAConfig[]> {
+  const q = query(collection(db, SLA_COLLECTION), where("organizationId", "==", organizationId));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data() as DocumentData & { updatedAt?: Timestamp };
+    return {
+      id: d.id,
+      ...data,
+      updatedAt: data.updatedAt?.toDate?.() ?? new Date(),
+    } as SLAConfig;
+  });
+}
+
+export async function upsertSLAConfig(config: Omit<SLAConfig, "id" | "updatedAt">, actor?: { id?: string }): Promise<void> {
+  // Check if config exists for this priority
+  const q = query(
+    collection(db, SLA_COLLECTION),
+    where("organizationId", "==", config.organizationId),
+    where("priority", "==", config.priority),
+  );
+  const snap = await getDocs(q);
+  const payload = {
+    ...config,
+    updatedAt: serverTimestamp(),
+    updatedBy: actor?.id,
+  };
+  if (snap.empty) {
+    await addDoc(collection(db, SLA_COLLECTION), payload);
+  } else {
+    await updateDoc(snap.docs[0].ref, payload);
+  }
 }

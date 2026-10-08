@@ -28,51 +28,78 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_BASE64_LENGTH = 5 * 1024 * 1024;
 
+/** Campus-specific categories matching the research design */
 const CATEGORIES = [
   "Electrical",
   "Plumbing",
   "Cleaning",
-  "Furniture",
-  "HVAC",
-  "Network",
-  "Safety",
-  "Infrastructure",
+  "Civil",
+  "Hostel",
+  "Laboratory",
   "Other",
 ] as const;
+
+/** Transparent priority rules — these take precedence over AI when matched */
+const PRIORITY_KEYWORDS = {
+  HIGH: ["exposed wiring", "sparks", "gas smell", "water near electrical", "blocked exit", "fire", "electric shock", "short circuit"],
+  MEDIUM: ["failed lights", "leaking tap", "blocked drain", "broken equipment", "no water", "ac not working", "fan not working"],
+  LOW: ["furniture", "painting", "cosmetic", "minor", "appearance"],
+};
+
+export function detectPriorityOverride(description: string): { severity: "HIGH" | "MEDIUM" | "LOW"; priority: "P2" | "P3" | "P4" } | null {
+  const lower = description.toLowerCase();
+  for (const kw of PRIORITY_KEYWORDS.HIGH) {
+    if (lower.includes(kw)) return { severity: "HIGH", priority: "P2" };
+  }
+  for (const kw of PRIORITY_KEYWORDS.MEDIUM) {
+    if (lower.includes(kw)) return { severity: "MEDIUM", priority: "P3" };
+  }
+  for (const kw of PRIORITY_KEYWORDS.LOW) {
+    if (lower.includes(kw)) return { severity: "LOW", priority: "P4" };
+  }
+  return null;
+}
 
 function buildPrompt(req: AIAnalysisRequest): string {
   const childLocationList = req.childLocations.map((c) => `- ${c.name}`).join("\n");
   const hasImage = !!req.image;
-  return `You are an issue-intelligence engine for a facility management system.
+  return `You are an AI analysis engine for a campus complaint management system at an educational institution in India.
 
 Organization: ${req.organization}
 Location: ${req.location}
 Available sub-areas:
 ${childLocationList || "(none)"}
 
-User description:
+User complaint description:
 "${req.description}"
 
-${hasImage ? "The user also provided a photo. Use it as supporting visual evidence alongside the description. If the image and description disagree, acknowledge uncertainty rather than inventing facts. Do not identify people or infer sensitive personal information." : "No photo was provided."}
+${hasImage ? "The user also provided a photo. Use it as supporting visual evidence alongside the description. If the image and description disagree, acknowledge uncertainty. Do not identify people." : "No photo was provided."}
 
 Rules:
 - Never invent technical facts not present in the user description or clearly visible in the image.
 - If the user mentions a specific sub-area that exists in the available list, use it as reportedArea.
 - If no matching sub-area exists, leave reportedArea empty or use the user's own words.
-- Severity must be grounded in the description and visible evidence only.
 - Confidence must reflect how certain you are given both text and any image.
 - Do not claim a component is definitely broken unless visually clear.
 
+Transparent Priority Rules (apply these first):
+- HIGH severity: exposed wiring, sparks, gas smell, water near electrical equipment, blocked exits, fire hazards, electric shock risk, short circuits
+- MEDIUM severity: failed lights, leaking taps, blocked drains, broken equipment, AC/fan not working, no water supply
+- LOW severity: minor furniture issues, cosmetic/appearance issues, painting needed
+- If none of the above match, use your best judgment from the description.
+
+Allowed categories: ${CATEGORIES.join(", ")}
+
 Return ONLY valid JSON with this exact schema:
 {
-  "title": "short issue title",
+  "title": "short descriptive issue title (max 80 chars)",
   "category": "one of the allowed categories",
-  "subcategory": "optional subcategory",
-  "reportedArea": "specific area if mentioned",
+  "subcategory": "optional more specific subcategory",
+  "reportedArea": "specific area if mentioned (e.g. Room 204, Lab Block B)",
   "severity": "LOW | MEDIUM | HIGH | CRITICAL",
   "priority": "P1 | P2 | P3 | P4",
   "summary": "factual summary of the issue",
-  "suggestedAction": "first reasonable action",
+  "suggestedAction": "first reasonable action for the maintenance team",
   "confidence": 0.0 to 1.0
 }
 
